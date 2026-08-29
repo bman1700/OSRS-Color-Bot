@@ -11,10 +11,12 @@ def test_mouse_translates_screen_coordinates_for_input_provider():
     mouse.move_rel(5, -10)
     mouse.click("right", force_delay=False)
 
-    assert [(event.name, event.args) for event in provider.events] == [
-        ("connect", ()),
-        ("move_to", (30, 40)),
-        ("move_to", (35, 30)),
+    assert provider.events[0].name == "connect"
+    moves = [event.args for event in provider.events if event.name == "move_to"]
+    assert len(moves) > 2
+    assert (30, 40) in moves
+    assert moves[-1] == (35, 30)
+    assert [(event.name, event.args) for event in provider.events[-2:]] == [
         ("mouse_down", ("right",)),
         ("mouse_up", ("right",)),
     ]

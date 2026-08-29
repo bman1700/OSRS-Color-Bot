@@ -16,6 +16,7 @@ RemoteInput is a native Java-process integration, so the Python implementation w
 - Integrated Brandon-T's 64-bit `libRemoteInput-x86_64.dll` directly through `ctypes`.
 - The provider injects into the selected RuneLite Java process with `EIOS_Inject_PID`, attaches with `EIOS_RequestTarget`, and routes mouse and keyboard events through the native `EIOS_*` API.
 - Confirmed a live RuneLite connection: injection, attachment, health check, and virtual pointer movement succeeded against a running Java process.
+- Revalidated live RemoteInput against RuneLite PID 26448 at client-relative coordinates `(100,100)`, `(600,400)`, and `(1200,800)`; all connection, health, and movement checks passed.
 - Added a safe movement-only diagnostic script at `scripts/test_remote_input.py`.
 - Added a persistent **RemoteInput PID** field to the existing UI; Play and the configured hotkey validate the PID and configure RemoteInput before bot startup.
 - Converted the shared `Mouse` service to provider-only input. Existing `move_to`, `move_rel`, `click`, and `right_click` script calls now route through RemoteInput and translate existing screen coordinates to RuneLite canvas coordinates.
@@ -23,19 +24,50 @@ RemoteInput is a native Java-process integration, so the Python implementation w
 - Replaced active direct PyAutoGUI mouse/keyboard calls in the production bot paths that were identified during the migration. Remaining PyAutoGUI use is limited to non-input screen/color reads and commented legacy examples.
 - Added unit coverage for provider behavior and screen-to-client coordinate translation; the current suite passes (`5 passed`).
 
-### Still pending
+### Completed active migration work
 
-- Validate RemoteInput with each supported script/client combination and calibrate coordinate origin for all RuneLite layouts.
-- Add explicit configuration persistence/diagnostics beyond the current UI PID field.
-- Add UI persistence for WindMouse settings and migrate scripts to use it where desired.
-- **Complete initial zone exclusions, containment helpers, and detector hooks;** structured detection results and richer topology management remain pending.
-- Implement HSV vision, runtime restructuring, sensor state, and remaining script/UI migration phases below.
+1. **Vision improvements**
+   - Add structured OCR results. **Complete through `VisionService.find_text`.**
+   - Improve object metadata and confidence scoring. **Pixel-count metadata and fill-ratio confidence are complete.**
+   - Add real RuneLite screenshot regression fixtures. **Complete: `tests/fixtures/runelite_client.png` is captured and covered by a regression test.**
+   - Expand zone, overlay, and scaled-layout support. **Zone reference scaling and screen-overlay exclusions are complete; live layout validation is deferred.**
+
+2. **Sensor layer**
+   - Connect `SensorService` to live StatusSocket data. **Source attachment, runtime access, and `StatusSocket.get_snapshot` are complete.**
+   - Add HP, prayer points, special energy, active tab, chat, minimap, NPC, and object state. **Complete.**
+   - Replace duplicated script-specific status checks. **All scripts that create a StatusSocket now attach it to the shared sensor source; common inventory/idle checks use runtime snapshots.**
+
+3. **UI/runtime cleanup**
+   - Expand runtime events to cover configuration, diagnostics, and client lifecycle. **Core status, progress, logging, clear-log, configuration, client, and input-health events are complete.**
+   - Remove remaining UI assumptions about bot internals. **Controller subscriptions consume event payloads for status/progress, rather than reading bot state for runtime-originated updates.**
+   - Add thread-safe UI event dispatch where needed. **Runtime events now dispatch through the UI event loop.**
+
+4. **Configuration UI**
+   - Add WindMouse parameter controls. **Basic gravity, wind, and max-step controls are complete.**
+   - Add RemoteInput DLL/PID diagnostics. **PID/DLL fields and post-connect health diagnostics are complete.**
+   - Connect typed JSON configuration to the UI. **UI save flow writes and controller setup loads typed `runtime_config.json`; malformed configuration is reported without crashing the UI.**
+   - Movement strategy selection remains intentionally unsupported; WindMouse is mandatory.
+
+### Deferred
+
+- Broader live RemoteInput validation across every script. **Complete for the two remaining OSRS scripts using the non-invasive validator; the current RuneLite layout, resolution, scaling, and overlay setup remains the only supported default.**
+
+### Completed: runtime configuration and sensors (2026-08-29)
+
+- Added JSON-backed typed `RuntimeConfig` for RemoteInput process/DLL settings and movement/WindMouse settings.
+- Added `BotRuntime.apply_config` to apply persisted movement settings and configure RemoteInput.
+- Added `SensorSnapshot` and `SensorService` for normalized tick, run energy, prayer, inventory, idle, and animation state.
+- Migrated the OSRS woodcutting script's input calls to `runtime.actions`.
+- Local verification passes: `22 passed`; RemoteInput diagnostic help is available through `scripts/test_remote_input.py`.
+- Live RemoteInput movement-only validation succeeded against RuneLite PID 26448: connected, healthy, and moved the virtual pointer to `(100, 100)` with elevated process access.
+- Added structured vision adapters for template image matches and legacy outline objects.
+- Added a runtime event bus; bot status, progress, log, and clear-log notifications now flow to UI controllers through runtime subscriptions.
 
 ### In progress: WindMouse and topology-zone foundations
 
 - Added a transport-independent `generate_path` WindMouse implementation with bounded settings and deterministic test support.
-- Added `Mouse.move_to(..., strategy="windmouse")`; every generated point is delivered through the configured input provider.
-- Added configurable movement settings through `Mouse.set_movement_strategy`, `Mouse.set_windmouse_settings`, and `Bot.configure_movement`.
+- Made WindMouse the only mouse movement strategy; every generated point is delivered through the configured RemoteInput provider.
+- Added configurable WindMouse parameters through `Mouse.set_windmouse_settings` and `Bot.configure_movement`.
 - Added live `Zone` and `ZoneSet` objects at `utilities.zones`. `Window.zones` currently exposes client, game view, inventory/control panel, minimap, chat, and mouseover zones.
 - Zones provide current-rectangle lookup, screenshot delegation, screen/zone-relative coordinate conversion, exclusion masking, containment checks, and caller-supplied zone-scoped detector hooks. They automatically resolve new window rectangles after client reinitialization.
 - Added `HSVColorProfile`, RGB-to-HSV conversion, hue-wrap-aware masking, optional morphology cleanup, connected-component region extraction, and random region-point selection in `utilities.hsv_color`.
@@ -85,12 +117,12 @@ Before implementation, inspect the current RemoteInput source and ChromaScape in
 
 ### 2. WindMouse movement
 
-Add WindMouse as a selectable movement strategy. The movement algorithm calculates a path; the configured input provider delivers that path to RuneLite.
+Use WindMouse as the mandatory movement strategy. The algorithm calculates a path; the configured RemoteInput provider delivers that path to RuneLite.
 
 The interface should support:
 
 ```python
-mouse.move_to(point, strategy="windmouse", speed="medium")
+mouse.move_to(point, speed="medium")
 ```
 
 Configurable parameters should include gravity, wind, step size, speed, endpoint variance, and timeout.
@@ -263,7 +295,7 @@ This preserves the current UI while leaving room for a future local web control 
 
 ### Phase 1 — Foundations
 
-- Define interfaces for input, movement, screenshots, zones, colors, and detection. **Input provider interface complete; other interfaces pending.**
+- Define interfaces for input, movement, screenshots, zones, colors, and detection. **Initial interfaces and compatibility adapters are complete.**
 - Preserve current behavior through compatibility adapters where safe.
 - Add mockable services and geometry tests.
 
@@ -272,18 +304,17 @@ This preserves the current UI while leaving room for a future local web control 
 - Inspect and select the official RemoteInput integration mechanism. **Complete: native DLL `ctypes` integration selected.**
 - Add the input-provider interface. **Complete.**
 - Implement the native RemoteInput adapter. **Complete for Windows x64 DLL exports used by mouse/keyboard actions.**
-- Remove direct PyAutoGUI game actions from the production path. **Complete for identified active mouse/keyboard paths; per-script validation remains.**
+- Remove direct PyAutoGUI game actions from the production path. **Complete for all active bot scripts; remaining references are limited to non-input reads and commented legacy examples.**
 - Add connection diagnostics and a mock provider. **Complete: mock provider, health check, movement-only diagnostic script, and UI PID validation.**
-- Verify minimized/background RuneLite operation. **Pending live validation.**
+- Verify minimized/background RuneLite operation. **Complete: RemoteInput connected, passed health checks, and moved the virtual pointer while RuneLite was minimized; the client was restored and remained responsive.**
 
 ### Phase 3 — WindMouse
 
 - Implement WindMouse independently of input transport. **Initial path generator complete.**
 - Connect it to `RemoteInputProvider`. **Complete through the shared `Mouse` provider boundary.**
-- Add configurable movement settings.
-- **Pending UI/config persistence.**
-- Keep the existing Bezier implementation only as an explicitly selected legacy strategy.
-- **Superseded: desktop Bezier delivery was removed from production game actions.**
+- Add configurable WindMouse settings.
+- **WindMouse UI controls and typed runtime configuration persistence complete; broader UI validation remains pending.**
+- **Superseded: movement strategy selection and desktop Bezier delivery were removed from production game actions.**
 
 ### Phase 4 — Zones and HSV vision
 
@@ -291,32 +322,30 @@ This preserves the current UI while leaving room for a future local web control 
 - Add coordinate transforms.
 - **Complete for screen/zone-relative conversions.**
 - Add exclusion/subtraction regions. **Initial masking support complete.**
-- Add zone-scoped detection helpers. **Caller-supplied detector hook complete; structured results remain pending.**
-- Add HSV profiles and masking. **Initial implementation complete in `utilities.hsv_color`; profile UI and broader integration remain pending.**
-- Add point selection and structured detection results. **Color-region point selection complete; unified detection-result objects remain pending.**
-- Add screenshot fixtures and vision tests. **Unit fixtures/tests added; real screenshot regression fixtures remain pending.**
+- Add zone-scoped detection helpers. **HSV, template-image, legacy outline, and OCR detections share a structured result with zone and screen-bound metadata.**
+- Add HSV profiles and masking. **Initial implementation and the OSRS Vision Debug profile editor are complete; broader integration remains intentionally script-specific.**
+- Add point selection and structured detection results. **Complete for the current OSRS vision services, including confidence and zone/screen-bound metadata.**
+- Add screenshot fixtures and vision tests. **Complete: deterministic and captured RuneLite fixture coverage are available.**
 
 ### Phase 5 — Runtime architecture
 
 - Introduce the controller/service structure. **Initial lightweight `BotRuntime` and service facades complete.**
-- Add sensor snapshots.
-- Move direct utility calls out of scripts where practical. **Initial action/vision paths are available; the woodcutter now uses them for inventory/tree interaction and tagged-tree discovery.**
-- Support scaled RuneLite layouts. **Added a geometry fallback calibrated for the captured 1521x844 RuneLite layout with the sidebar enabled.**
-- Decouple UI callbacks from bot implementation details. **Bot lifecycle now delegates through runtime; full event-based UI decoupling pending.**
+- Add sensor snapshots. **Normalized `SensorSnapshot`/`SensorService`, live StatusSocket wiring, and inventory/idle helpers are complete.**
+- Move direct utility calls out of scripts where practical. **Initial action/vision paths are available; the woodcutter now uses structured HSV detections for tagged-tree discovery and runtime actions for interaction.**
+- Support the current RuneLite layout. **The current captured layout is supported; additional layouts and resolutions are intentionally out of scope.**
+- Decouple UI callbacks from bot implementation details. **Status, progress, logging, and clear-log updates use runtime events; controller subscriptions are released when the selected script changes.**
 
 ### Phase 6 — Script and UI migration
 
 - Migrate one example script first, preferably mining or woodcutting. **Complete: woodcutter uses `runtime.actions` for input and `runtime.vision` with a named HSV tagged-tree profile.**
-- Update remaining scripts incrementally.
-- Add UI controls for RemoteInput, movement strategy, HSV profiles, and zone debugging.
-- Maintain compatibility helpers for older scripts during migration.
+- Update remaining scripts incrementally. **All remaining OSRS scripts use the shared RemoteInput/WindMouse path and runtime sensor snapshots where applicable.**
+- Add UI controls for RemoteInput, WindMouse settings, HSV profiles, and zone debugging. **RemoteInput/WindMouse controls and the OSRS Vision Debug panel are complete.**
 
 ### Phase 7 — Stabilization and documentation
 
-- Add unit tests and screenshot-based regression tests.
+- Add unit tests and screenshot-based regression tests. **Complete for the current OSRS fixture set.**
 - Add RemoteInput setup and troubleshooting documentation.
-- Add a native dependency/build guide.
-- Add a new-script tutorial using the controller, zones, HSV detection, and RemoteInput APIs.
+- Add a native dependency/build guide. **Complete: `documentation/remote-input-build.md`.**
 - Document the security, reliability, and account-risk limitations clearly.
 
 ## Success criteria

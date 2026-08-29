@@ -64,6 +64,10 @@ class StatusSocket:
         print(player_data)
         return player_data
 
+    def get_snapshot(self) -> dict:
+        """Return the latest payload without logging it to stdout."""
+        return dict(player_data)
+
     def get_game_tick(self) -> int:
         """
         Fetches the game tick from the API.

@@ -58,7 +58,7 @@ class App(customtkinter.CTk):
         self.frame_right.grid(row=0, column=1, sticky="nswe", padx=20, pady=20)
 
         # ============ View/Controller Configuration (frame_right) ============
-        self.views: dict[str, customtkinter.CTkFrame] = {}  # A map of all views, keyed by game title
+        self.views: dict[str, customtkinter.CTkFrame] = {}
         self.models: dict[str, Bot] = {}  # A map of all models (bots), keyed by bot title
 
         # Script view and controller [DO NOT EDIT]
@@ -95,9 +95,7 @@ class App(customtkinter.CTk):
             obj = getattr(module, name)
             if obj is not Bot and obj is not RuneLiteBot and isinstance(obj, type) and issubclass(obj, Bot):
                 instance = obj()
-                if instance.game_title != "OSRS":
-                    continue
-                # Make a home view if one doesn't exist
+                # All registered scripts are OSRS scripts.
                 if isinstance(instance, RuneLiteBot) and instance.game_title not in self.views:
                     self.views[instance.game_title] = RuneLiteHomeView(parent=self.frame_right, main=self, game_title=instance.game_title)
                 instance.set_controller(self.controller)
@@ -197,44 +195,6 @@ class App(customtkinter.CTk):
         view = SettingsView(parent=window)
         view.pack(side="top", fill="both", expand=True, padx=20, pady=20)
         window.after(100, window.lift)  # Workaround for bug where main window takes focus
-
-    def __on_game_selector_change(self, choice):
-        """
-        Handles the event that occurs when the user selects a game title from the dropdown menu.
-        Args:
-            choice: The key of the game that the user selected.
-        """
-        if choice not in list(self.btn_map.keys()):
-            return
-        # Un-highlight current button
-        if self.current_btn is not None:
-            self.current_btn.configure(fg_color=self.DEFAULT_GRAY)
-            self.current_btn = None
-        # Unpack current buttons
-        if self.current_btn_list is not None:
-            for btn in self.current_btn_list:
-                btn.grid_forget()
-        # Unpack current script view
-        if self.views["Script"].winfo_exists():
-            self.views["Script"].pack_forget()
-        # Unlink model from controller
-        self.controller.change_model(None)
-        # Pack new buttons
-        self.current_btn_list = self.btn_map[choice]
-        for r, btn in enumerate(self.current_btn_list, 3):
-            btn.grid(row=r, column=0, sticky="we", padx=10, pady=10)
-        # Repack new home view
-        self.current_home_view.pack_forget()
-        self.current_home_view = self.views[choice]
-        self.current_home_view.pack(
-            in_=self.frame_right,
-            side=tkinter.TOP,
-            fill=tkinter.BOTH,
-            expand=True,
-            padx=0,
-            pady=0,
-        )
-        self.toggle_btn_state(enabled=False)
 
     def __toggle_bot_by_key(self, bot_key, btn: customtkinter.CTkButton):
         # sourcery skip: extract-method

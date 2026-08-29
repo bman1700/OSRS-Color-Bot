@@ -106,9 +106,9 @@ class Bot(ABC):
         self.input_provider: InputProvider | None = None
         self.runtime = BotRuntime(self.win, self.mouse)
 
-    def configure_remote_input(self, process_id: int) -> None:
+    def configure_remote_input(self, process_id: int, dll_path: str | None = None) -> None:
         """Configure the required native input path for this game client."""
-        self.input_provider = RemoteInputProvider(process_id=process_id)
+        self.input_provider = RemoteInputProvider(process_id=process_id, dll_path=dll_path or None)
         self.runtime.set_input_provider(self.input_provider)
 
     def set_input_provider(self, provider: InputProvider) -> None:
@@ -116,14 +116,17 @@ class Bot(ABC):
         self.input_provider = provider
         self.runtime.set_input_provider(provider)
 
-    def configure_movement(self, strategy: str = "direct", windmouse_settings: WindMouseSettings | None = None) -> None:
-        """Configure movement for future mouse actions without changing scripts."""
-        if strategy not in {"direct", "windmouse"}:
-            raise ValueError("Unknown movement strategy. Use 'direct' or 'windmouse'.")
-        self.movement_strategy = strategy
-        self.mouse.set_movement_strategy(strategy)
+    def configure_movement(self, windmouse_settings: WindMouseSettings | None = None) -> None:
+        """Configure the shared WindMouse movement parameters."""
         if windmouse_settings is not None:
             self.mouse.set_windmouse_settings(windmouse_settings)
+
+    def attach_status_socket(self, status_socket) -> None:
+        """Expose a script's StatusSocket payload through the shared sensor service."""
+        source = getattr(status_socket, "get_snapshot", None)
+        if source is None:
+            raise TypeError("Status source must expose get_snapshot()")
+        self.runtime.attach_sensor_source(source)
 
     @abstractmethod
     def main_loop(self):
@@ -212,7 +215,7 @@ class Bot(ABC):
         Resets the current progress property to 0 and notifies the controller to update UI.
         """
         self.progress = 0
-        self.controller.update_progress()
+        self.runtime.emit("progress", self.progress)
 
     def update_progress(self, progress: float):
         """
@@ -225,7 +228,7 @@ class Bot(ABC):
         elif progress > 1:
             progress = 1
         self.progress = progress
-        self.controller.update_progress()
+        self.runtime.emit("progress", self.progress)
 
     def set_status(self, status: BotStatus):
         """
@@ -234,7 +237,7 @@ class Bot(ABC):
             status: BotStatus - status to set the bot to
         """
         self.status = status
-        self.controller.update_status()
+        self.runtime.emit("status", status)
 
     def log_msg(self, msg: str, overwrite=False):
         """
@@ -244,13 +247,13 @@ class Bot(ABC):
             overwrite: bool - if True, overwrites the current log message. If False, appends to the log.
         """
         msg = f"{debug.current_time()}: {msg}"
-        self.controller.update_log(msg, overwrite)
+        self.runtime.emit("log", (msg, overwrite))
 
     def clear_log(self):
         """
         Requests the controller to tell the UI to clear the log.
         """
-        self.controller.clear_log()
+        self.runtime.emit("clear_log")
 
     # --- Misc Utility Functions
     def drop_all(self, skip_rows: int = 0, skip_slots: List[int] = None) -> None:

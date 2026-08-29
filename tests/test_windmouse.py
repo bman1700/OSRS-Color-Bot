@@ -20,7 +20,6 @@ def test_mouse_delivers_windmouse_path_to_provider():
     provider = MockInputProvider()
     provider.connect()
     mouse = Mouse(provider, coordinate_origin=(0, 0))
-    mouse.set_movement_strategy("windmouse")
     mouse.windmouse_settings = WindMouseSettings(max_points=100)
 
     mouse.move_to((30, 20))

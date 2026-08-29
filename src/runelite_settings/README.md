@@ -1,4 +1,5 @@
-The properties files in this folder must have names that directly correspond to the game they are meant for.
-The format is `{game_title}_settings.properties`.
+This folder contains the default RuneLite profile used by the OSRS client.
 
-All Bots have a `game_title` property. That property is used to locate this settings file.
+`osrs_settings.properties` is the current OSRS default baseline captured from
+the active RuneLite profile. It keeps the project-required Status Socket and
+woodcutting settings enabled.

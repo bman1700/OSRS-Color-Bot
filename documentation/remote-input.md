@@ -22,6 +22,8 @@ provider.disconnect()
 The provider calls the DLL's `EIOS_Inject_PID`, `EIOS_RequestTarget`, `EIOS_MoveMouse`,
 `EIOS_HoldMouse`, `EIOS_ReleaseMouse`, `EIOS_HoldKey`, and `EIOS_ReleaseKey` exports.
 If attaching fails, it raises `InputProviderError` and no desktop-input fallback is used.
+On Windows, OSBC and RuneLite may need to run at the same elevation level. If the diagnostic
+reports `Cannot Initialize Maps`, retry it from an elevated terminal.
 
 For a safe connection test (movement only; no click or keyboard input), run:
 

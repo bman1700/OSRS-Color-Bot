@@ -1,6 +1,7 @@
 from collections import namedtuple
 
 from runtime import BotRuntime
+from runtime import RuntimeEventBus
 from utilities.input import MockInputProvider
 from utilities.mouse import Mouse
 from utilities.zones import ZoneSet
@@ -55,12 +56,33 @@ def test_runtime_wires_client_input_and_actions():
     runtime.stop()
 
     assert window.focused and window.initialized
-    assert [(event.name, event.args) for event in provider.events] == [
-        ("connect", ()),
-        ("move_to", (5, 4)),
-        ("mouse_down", ("left",)),
-        ("mouse_up", ("left",)),
-        ("mouse_down", ("left",)),
-        ("mouse_up", ("left",)),
-        ("disconnect", ()),
+    assert provider.events[0].name == "connect"
+    moves = [event.args for event in provider.events if event.name == "move_to"]
+    assert len(moves) > 1
+    assert moves[-1] == (5, 4)
+    assert [event.name for event in provider.events[-5:]] == [
+        "mouse_down", "mouse_up", "mouse_down", "mouse_up", "disconnect"
     ]
+
+
+def test_runtime_event_bus_delivers_events_to_subscribers():
+    events = []
+    bus = RuntimeEventBus()
+    bus.subscribe("status", events.append)
+    bus.emit("status", "running")
+
+    assert events[0].name == "status"
+    assert events[0].payload == "running"
+
+
+def test_runtime_event_bus_uses_dispatcher_when_configured():
+    callbacks = []
+    events = []
+    bus = RuntimeEventBus()
+    bus.set_dispatcher(callbacks.append)
+    bus.subscribe("status", events.append)
+    bus.emit("status", "running")
+
+    assert not events
+    callbacks.pop()()
+    assert events[0].payload == "running"

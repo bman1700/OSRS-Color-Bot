@@ -21,7 +21,6 @@ class Mouse:
         self.coordinate_origin = coordinate_origin
         self._last_position: tuple[int, int] | None = None
         self.windmouse_settings = WindMouseSettings()
-        self.movement_strategy = "direct"
 
     def set_input_provider(self, input_provider: InputProvider, coordinate_origin: tuple[int, int]) -> None:
         self.input_provider = input_provider
@@ -30,11 +29,6 @@ class Mouse:
 
     def set_windmouse_settings(self, settings: WindMouseSettings) -> None:
         self.windmouse_settings = settings
-
-    def set_movement_strategy(self, strategy: str) -> None:
-        if strategy not in {"direct", "windmouse"}:
-            raise ValueError("Unknown movement strategy. Use 'direct' or 'windmouse'.")
-        self.movement_strategy = strategy
 
     def position(self) -> tuple[int, int]:
         if self.input_provider is None:
@@ -57,14 +51,8 @@ class Mouse:
         if self.input_provider is None:
             raise RuntimeError("Mouse input provider has not been configured")
         dest_x, dest_y = int(destination[0]), int(destination[1])
-        strategy = kwargs.get("strategy", self.movement_strategy)
-        if strategy == "windmouse":
-            for point in generate_path(self.position(), (dest_x, dest_y), self.windmouse_settings):
-                self.input_provider.move_to(*self._to_client_coordinates(point))
-        elif strategy == "direct":
-            self.input_provider.move_to(*self._to_client_coordinates((dest_x, dest_y)))
-        else:
-            raise ValueError("Unknown movement strategy. Use 'direct' or 'windmouse'.")
+        for point in generate_path(self.position(), (dest_x, dest_y), self.windmouse_settings):
+            self.input_provider.move_to(*self._to_client_coordinates(point))
         self._last_position = (dest_x, dest_y)
 
     def move_rel(self, x: int, y: int, x_var: int = 0, y_var: int = 0, **kwargs):

@@ -13,6 +13,7 @@ class Zone:
     name: str
     rectangle_provider: Callable[[], Any]
     exclusions: list[dict[str, int]] | None = None
+    reference_size: tuple[int, int] | None = None
 
     def __post_init__(self) -> None:
         if self.exclusions is None:
@@ -46,13 +47,72 @@ class Zone:
     def clear_exclusions(self) -> None:
         self.exclusions.clear()
 
+    def add_screen_exclusion(self, left: int, top: int, width: int, height: int) -> None:
+        """Add a screen-relative overlay exclusion, clipped to this live zone."""
+        relative_left, relative_top = self.to_relative((left, top))
+        self.add_exclusion(relative_left, relative_top, width, height)
+
+    def set_reference_size(self, width: int, height: int) -> None:
+        if width <= 0 or height <= 0:
+            raise ValueError("Zone reference dimensions must be positive")
+        self.reference_size = (int(width), int(height))
+
+    def scale_relative(self, point: tuple[int, int]) -> tuple[int, int]:
+        """Map a point from an optional reference layout to the live zone."""
+        if self.reference_size is None:
+            return int(point[0]), int(point[1])
+        reference_width, reference_height = self.reference_size
+        rect = self.rectangle
+        return round(point[0] * rect.width / reference_width), round(point[1] * rect.height / reference_height)
+
+    def unscale_relative(self, point: tuple[int, int]) -> tuple[int, int]:
+        """Map a point from the live zone back to its optional reference layout."""
+        if self.reference_size is None:
+            return int(point[0]), int(point[1])
+        reference_width, reference_height = self.reference_size
+        rect = self.rectangle
+        return round(point[0] * reference_width / rect.width), round(point[1] * reference_height / rect.height)
+
     def contains_screen(self, point: tuple[int, int]) -> bool:
         rect = self.rectangle
-        return rect.left <= point[0] < rect.left + rect.width and rect.top <= point[1] < rect.top + rect.height
+        return (
+            rect.left <= point[0] < rect.left + rect.width
+            and rect.top <= point[1] < rect.top + rect.height
+            and not self.is_excluded((point[0] - rect.left, point[1] - rect.top))
+        )
 
     def contains_relative(self, point: tuple[int, int]) -> bool:
         rect = self.rectangle
-        return 0 <= point[0] < rect.width and 0 <= point[1] < rect.height
+        return 0 <= point[0] < rect.width and 0 <= point[1] < rect.height and not self.is_excluded(point)
+
+    def is_excluded(self, point: tuple[int, int]) -> bool:
+        """Return whether a zone-relative point falls in an exclusion rectangle."""
+        x, y = point
+        return any(
+            exclusion["left"] <= x < exclusion["left"] + exclusion["width"]
+            and exclusion["top"] <= y < exclusion["top"] + exclusion["height"]
+            for exclusion in self.exclusions
+        )
+
+    def contains_rectangle(self, rectangle: dict[str, int], *, allow_excluded: bool = False) -> bool:
+        """Return whether a relative rectangle fits entirely inside this zone."""
+        if rectangle["width"] < 0 or rectangle["height"] < 0:
+            return False
+        corners = (
+            (rectangle["left"], rectangle["top"]),
+            (rectangle["left"] + rectangle["width"] - 1, rectangle["top"] + rectangle["height"] - 1),
+        )
+        if not all(0 <= x < self.rectangle.width and 0 <= y < self.rectangle.height for x, y in corners):
+            return False
+        if allow_excluded:
+            return True
+        return not any(
+            rectangle["left"] < exclusion["left"] + exclusion["width"]
+            and rectangle["left"] + rectangle["width"] > exclusion["left"]
+            and rectangle["top"] < exclusion["top"] + exclusion["height"]
+            and rectangle["top"] + rectangle["height"] > exclusion["top"]
+            for exclusion in self.exclusions
+        )
 
     def relative_rectangle(self) -> dict[str, int]:
         """Return the current zone bounds in zone-local coordinates."""
@@ -71,6 +131,9 @@ class Zone:
     def to_screen(self, point: tuple[int, int]) -> tuple[int, int]:
         rect = self.rectangle
         return rect.left + int(point[0]), rect.top + int(point[1])
+
+    def reference_to_screen(self, point: tuple[int, int]) -> tuple[int, int]:
+        return self.to_screen(self.scale_relative(point))
 
     def to_relative(self, point: tuple[int, int]) -> tuple[int, int]:
         rect = self.rectangle

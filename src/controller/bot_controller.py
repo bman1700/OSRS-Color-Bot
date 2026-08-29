@@ -4,6 +4,7 @@ Serves as the mediator between a bot and the UI. Methods should likely not be mo
 
 from model.bot import Bot, BotStatus
 from view.bot_view import BotView
+from utilities.windmouse import WindMouseSettings
 
 
 class BotController(object):
@@ -13,6 +14,27 @@ class BotController(object):
         """
         self.model: Bot = model
         self.view: BotView = view
+        self._subscriptions = []
+        self._subscribe_runtime()
+
+    def _subscribe_runtime(self):
+        if self.model is None:
+            return
+        self.model.runtime.events.set_dispatcher(lambda callback: self.view.after(0, callback))
+        self._subscriptions = [
+            self.model.runtime.events.subscribe("status", lambda event: self.update_status(event.payload)),
+            self.model.runtime.events.subscribe("progress", lambda event: self.update_progress(event.payload)),
+            self.model.runtime.events.subscribe("log", lambda event: self.update_log(*event.payload)),
+            self.model.runtime.events.subscribe("clear_log", lambda event: self.clear_log()),
+            self.model.runtime.events.subscribe("input_health", lambda event: self.update_log("RemoteInput health check passed.")),
+            self.model.runtime.events.subscribe("config_error", lambda event: self.update_log(event.payload)),
+            self.model.runtime.events.subscribe("client_initialized", lambda event: self.update_log(f"RuneLite client initialized at {event.payload}.")),
+        ]
+
+    def _unsubscribe_runtime(self):
+        for unsubscribe in self._subscriptions:
+            unsubscribe()
+        self._subscriptions = []
 
     def play(self):
         """
@@ -20,7 +42,7 @@ class BotController(object):
         """
         self.model.play()
 
-    def configure_remote_input(self, process_id: str) -> bool:
+    def configure_remote_input(self, process_id: str, dll_path: str = "") -> bool:
         """Validate and apply the Java PID selected in the UI."""
         try:
             pid = int(process_id)
@@ -29,8 +51,20 @@ class BotController(object):
         except (TypeError, ValueError):
             self.update_log("Enter a valid RuneLite Java process ID before starting.")
             return False
-        self.model.configure_remote_input(pid)
+        self.model.configure_remote_input(pid, dll_path.strip() or None)
         return True
+
+    def save_runtime_config(self) -> None:
+        self.model.runtime.save_config()
+
+    def configure_windmouse(self, values: tuple[str, str, str]) -> bool:
+        try:
+            movement = WindMouseSettings(gravity=float(values[0]), wind=float(values[1]), max_step=float(values[2]))
+            self.model.configure_movement(movement)
+            return True
+        except (TypeError, ValueError) as error:
+            self.update_log(f"Invalid WindMouse settings: {error}")
+            return False
 
     def stop(self):
         """
@@ -68,11 +102,11 @@ class BotController(object):
         """
         self.model.launch_game()
 
-    def update_status(self):
+    def update_status(self, status=None):
         """
         Called from model. Tells view to update status.
         """
-        status = self.model.status
+        status = self.model.status if status is None else status
         if status == BotStatus.RUNNING:
             self.view.frame_info.update_status_running()
         elif status == BotStatus.STOPPED:
@@ -82,11 +116,11 @@ class BotController(object):
         elif status == BotStatus.CONFIGURED:
             self.view.frame_info.update_status_configured()
 
-    def update_progress(self):
+    def update_progress(self, progress=None):
         """
         Called from model. Tells view to update progress.
         """
-        self.view.frame_info.update_progress(self.model.progress)
+        self.view.frame_info.update_progress(self.model.progress if progress is None else progress)
 
     def update_log(self, msg: str, overwrite: bool = False):
         """
@@ -113,8 +147,10 @@ class BotController(object):
             except AttributeError:
                 print("Could not stop bot thread when changing views as it was not running. This is normal.")
             self.model.options_set = False
+        self._unsubscribe_runtime()
         self.model = model
         if self.model is not None:
+            self._subscribe_runtime()
             self.view.frame_info.setup(title=model.bot_title, description=model.description)
             self.view.frame_info.start_keyboard_listener()
         else:

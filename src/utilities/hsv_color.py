@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import random
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +41,11 @@ class HSVColorProfile:
         pixel = np.uint8([[list(rgb[::-1])]])
         hue, saturation, value = map(int, cv2.cvtColor(pixel, cv2.COLOR_BGR2HSV)[0, 0])
         dh, ds, dv = tolerance
-        return cls(name, (max(0, hue - dh), max(0, saturation - ds), max(0, value - dv)), (min(179, hue + dh), min(255, saturation + ds), min(255, value + dv)), **kwargs)
+        # OpenCV hue is circular. Preserve a wrapped interval such as
+        # (175, 5) instead of clipping it, which would miss red pixels near 0.
+        lower_hue = (hue - dh) % 180
+        upper_hue = (hue + dh) % 180
+        return cls(name, (lower_hue, max(0, saturation - ds), max(0, value - dv)), (upper_hue, min(255, saturation + ds), min(255, value + dv)), **kwargs)
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,37 @@ class ColorRegion:
     def random_point(self, rng: random.Random | None = None) -> tuple[int, int]:
         rng = rng or random.Random()
         return rng.randrange(self.left, self.left + self.width), rng.randrange(self.top, self.top + self.height)
+
+
+@dataclass(frozen=True)
+class DetectionResult:
+    """A stable, script-facing representation of one detected region."""
+
+    bounds: ColorRegion | None
+    source: str
+    confidence: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict, compare=False)
+
+    @property
+    def found(self) -> bool:
+        return self.bounds is not None
+
+    @property
+    def center(self) -> tuple[int, int] | None:
+        return self.bounds.center if self.bounds else None
+
+    @property
+    def suggested_point(self) -> tuple[int, int] | None:
+        return self.center
+
+    def random_point(self, rng: random.Random | None = None) -> tuple[int, int] | None:
+        return self.bounds.random_point(rng) if self.bounds else None
+
+    def __getattr__(self, name: str) -> Any:
+        """Keep existing region attribute access working during migration."""
+        if self.bounds is not None and name in {"left", "top", "width", "height", "area"}:
+            return getattr(self.bounds, name)
+        raise AttributeError(name)
 
 
 def rgb_to_hsv(rgb: tuple[int, int, int]) -> tuple[int, int, int]:

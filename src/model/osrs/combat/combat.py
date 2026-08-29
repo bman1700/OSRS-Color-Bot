@@ -87,6 +87,7 @@ class OSRSCombat(OSRSBot, launcher.Launchable):
         # Setup API
         api_morg = MorgHTTPSocket()
         api_status = StatusSocket()
+        self.attach_status_socket(api_status)
 
         self.toggle_auto_retaliate(True)
 
@@ -101,7 +102,7 @@ class OSRSCombat(OSRSBot, launcher.Launchable):
         end_time = self.running_time * 60
         while time.time() - start_time < end_time:
             # If inventory is full...
-            if api_status.get_is_inv_full():
+            if self.runtime.snapshot().inventory_full:
                 self.log_msg("Inventory is full. Idk what to do.")
                 self.set_status(BotStatus.STOPPED)
                 return
@@ -133,21 +134,21 @@ class OSRSCombat(OSRSBot, launcher.Launchable):
             while api_morg.get_is_in_combat():
                 # Check to eat food
                 if self.get_hp() < self.hp_threshold:
-                    self.__eat(api_status)
+                    self.__eat()
                 time.sleep(1)
 
             # Loot all highlighted items on the ground
             if self.loot_items:
-                self.__loot(api_status)
+                self.__loot()
 
             self.update_progress((time.time() - start_time) / end_time)
 
         self.update_progress(1)
         self.__logout("Finished.")
 
-    def __eat(self, api: StatusSocket):
+    def __eat(self):
         self.log_msg("HP is low.")
-        food_slots = api.get_inv_item_indices(item_ids.all_food)
+        food_slots = self.runtime.snapshot().item_indices(item_ids.all_food)
         if len(food_slots) == 0:
             self.log_msg("No food found. Pls tell me what to do...")
             self.set_status(BotStatus.STOPPED)
@@ -156,16 +157,16 @@ class OSRSCombat(OSRSBot, launcher.Launchable):
         self.mouse.move_to(self.win.inventory_slots[food_slots[0]].random_point())
         self.mouse.click()
 
-    def __loot(self, api: StatusSocket):
+    def __loot(self):
         """Picks up loot while there is loot on the ground"""
         while self.pick_up_loot(self.loot_items):
-            if api.get_is_inv_full():
+            if self.runtime.snapshot().inventory_full:
                 self.__logout("Inventory full. Cannot loot.")
                 return
-            curr_inv = len(api.get_inv())
+            curr_inv = self.runtime.snapshot().inventory_count
             self.log_msg("Picking up loot...")
             for _ in range(5):  # give the bot 5 seconds to pick up the loot
-                if len(api.get_inv()) != curr_inv:
+                if self.runtime.snapshot().inventory_count != curr_inv:
                     self.log_msg("Loot picked up.")
                     time.sleep(1)
                     break

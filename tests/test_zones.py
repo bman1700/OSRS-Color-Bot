@@ -55,3 +55,29 @@ def test_zone_exclusion_masks_relative_area():
     image = zone.screenshot()
     assert image[1, 1].tolist() == [0, 0, 0]
     assert image[0, 0].tolist() == [1, 1, 1]
+
+
+def test_zone_exclusions_are_respected_by_containment_helpers():
+    zone = Zone("test", lambda: FakeRectangle(0, 0))
+    zone.add_exclusion(2, 2, 3, 3)
+
+    assert zone.is_excluded((2, 2))
+    assert not zone.contains_relative((2, 2))
+    assert zone.contains_rectangle({"left": 0, "top": 0, "width": 2, "height": 2})
+    assert not zone.contains_rectangle({"left": 1, "top": 1, "width": 3, "height": 3})
+    assert not zone.contains_rectangle({"left": 0, "top": 0, "width": 10, "height": 10})
+    assert zone.contains_rectangle({"left": 0, "top": 0, "width": 10, "height": 10}, allow_excluded=True)
+
+
+def test_zone_scales_reference_layout_coordinates_and_screen_exclusions():
+    rectangle = FakeRectangle(100, 200)
+    rectangle.width = 20
+    rectangle.height = 30
+    zone = Zone("test", lambda: rectangle)
+    zone.set_reference_size(10, 15)
+
+    assert zone.scale_relative((5, 10)) == (10, 20)
+    assert zone.unscale_relative((10, 20)) == (5, 10)
+    assert zone.reference_to_screen((5, 10)) == (110, 220)
+    zone.add_screen_exclusion(112, 222, 2, 2)
+    assert zone.is_excluded((12, 22))

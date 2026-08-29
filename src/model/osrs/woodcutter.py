@@ -4,7 +4,6 @@ from math import dist
 import utilities.api.item_ids as ids
 import utilities.random_util as rd
 from model.osrs.osrs_bot import OSRSBot
-from utilities.api.morg_http_client import MorgHTTPSocket
 from utilities.api.status_socket import StatusSocket
 from utilities.hsv_color import HSVColorProfile
 
@@ -43,8 +42,8 @@ class OSRSWoodcutter(OSRSBot):
 
     def main_loop(self):
         # Setup API
-        api_m = MorgHTTPSocket()
         api_s = StatusSocket()
+        self.attach_status_socket(api_s)
 
         self.log_msg("Selecting inventory...")
         self.runtime.actions.click_at(self.win.cp_tabs[3].random_point())
@@ -62,11 +61,11 @@ class OSRSWoodcutter(OSRSBot):
 
             # 2% chance to drop logs early
             if rd.random_chance(probability=0.02):
-                self.__drop_logs(api_s)
+                self.__drop_logs()
 
             # If inventory is full, drop logs
-            if api_s.get_is_inv_full():
-                self.__drop_logs(api_s)
+            if self.runtime.snapshot().inventory_full:
+                self.__drop_logs()
 
             # Select a fresh tagged tree each cycle; marker detection replaces the
             # old hover-text OCR check for this scaled client layout.
@@ -89,7 +88,7 @@ class OSRSWoodcutter(OSRSBot):
 
             # While the player is chopping (or moving), wait
             probability = 0.10
-            while not api_m.get_is_player_idle():
+            while self.runtime.snapshot().player_idle is False:
                 # Every second there is a chance to move the mouse to the next tree, lessen the chance as time goes on
                 if rd.random_chance(probability):
                     self.__move_mouse_to_nearest_tree(next_nearest=True)
@@ -117,7 +116,7 @@ class OSRSWoodcutter(OSRSBot):
         Returns:
             True if success, False otherwise.
         """
-        trees = self.runtime.vision.find_hsv("game_view", self.tree_profile)
+        trees = self.runtime.vision.detect_hsv("game_view", self.tree_profile)
         if not trees:
             return False
         # If we are looking for the next nearest tree, we need to make sure trees has at least 2 elements
@@ -132,12 +131,12 @@ class OSRSWoodcutter(OSRSBot):
         self.runtime.actions.move_to(zone.to_screen(tree.center))
         return True
 
-    def __drop_logs(self, api_s: StatusSocket):
+    def __drop_logs(self):
         """
         Private function for dropping logs. This code is used in multiple places, so it's been abstracted.
         Since we made the `api` and `logs` variables assigned to `self`, we can access them from this function.
         """
-        slots = api_s.get_inv_item_indices(ids.logs)
+        slots = self.runtime.snapshot().item_indices(ids.logs)
         self.drop(slots)
         self.logs += len(slots)
         self.log_msg(f"Logs cut: ~{self.logs}")

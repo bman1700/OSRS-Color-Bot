@@ -31,7 +31,13 @@ def __imagesearcharea(template: Union[cv2.Mat, str, Path], im: cv2.Mat, confiden
     alpha = template[:, :, 3]
     alpha = cv2.merge([alpha, alpha, alpha])
 
-    correlation = cv2.matchTemplate(im, base, cv2.TM_SQDIFF_NORMED, mask=alpha)
+    # OpenCV's masked TM_SQDIFF_NORMED path can produce invalid large values
+    # for fully opaque masks. Use the stable unmasked normalized path when
+    # there is no transparency; retain masking for sprites with alpha.
+    if cv2.countNonZero(template[:, :, 3]) == template.shape[0] * template.shape[1]:
+        correlation = cv2.matchTemplate(im, base, cv2.TM_SQDIFF_NORMED)
+    else:
+        correlation = cv2.matchTemplate(im, base, cv2.TM_SQDIFF_NORMED, mask=alpha)
     min_val, _, min_loc, _ = cv2.minMaxLoc(correlation)
     if min_val < confidence:
         return Rectangle.from_points(Point(min_loc[0], min_loc[1]), Point(min_loc[0] + ww, min_loc[1] + hh))

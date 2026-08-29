@@ -3,7 +3,7 @@ import random
 import cv2
 import numpy as np
 
-from utilities.hsv_color import HSVColorProfile, HSVProfileStore, find_regions, rgb_to_hsv
+from utilities.hsv_color import DetectionResult, HSVColorProfile, HSVProfileStore, find_regions, rgb_to_hsv
 
 
 def test_rgb_profile_finds_region_and_random_point(tmp_path):
@@ -29,3 +29,15 @@ def test_profile_store_round_trip(tmp_path):
 
 def test_rgb_to_hsv_uses_opencv_ranges():
     assert rgb_to_hsv((255, 0, 0)) == (0, 255, 255)
+
+
+def test_red_profile_preserves_hue_wrap():
+    profile = HSVColorProfile.from_rgb("red", (255, 0, 0), tolerance=(5, 10, 10))
+    assert profile.lower[0] > profile.upper[0]
+
+
+def test_detection_result_exposes_structured_and_legacy_fields():
+    region = find_regions(np.full((4, 4, 3), (0, 0, 0), dtype=np.uint8), HSVColorProfile("none", (1, 1, 1), (1, 1, 1)))
+    result = DetectionResult(None, "none")
+    assert not result.found
+    assert result.center is None
