@@ -16,6 +16,7 @@ from deprecated import deprecated
 import utilities.debug as debug
 import utilities.imagesearch as imsearch
 from utilities.geometry import Point, Rectangle
+from utilities.zones import ZoneSet
 
 
 class WindowInitializationError(Exception):
@@ -74,9 +75,11 @@ class Window:
         self.window_title = window_title
         self.padding_top = padding_top
         self.padding_left = padding_left
+        self.zones = ZoneSet(self)
 
     def _get_window(self):
-        self._client = pywinctl.getWindowsWithTitle(self.window_title)
+        title = self.window_title.casefold()
+        self._client = [window for window in pywinctl.getAllWindows() if title in window.title.casefold()]
         if self._client:
             return self._client[0]
         else:
@@ -137,7 +140,40 @@ class Window:
         if all([a, b, c, d]):  # if all templates found
             print(f"Window.initialize() took {time.time() - start_time} seconds.")
             return True
-        raise WindowInitializationError()
+        self.__initialize_layout_fallback(client_rect)
+        print(f"Window.initialize() using geometry fallback ({time.time() - start_time} seconds).")
+        return True
+
+    def __initialize_layout_fallback(self, client_rect: Rectangle) -> None:
+        """Initialize the common RuneLite resizable layout when templates are scaled."""
+        content_left = client_rect.left + 8
+        content_top = client_rect.top + 30
+        content_bottom = client_rect.top + client_rect.height - 7
+        game_right = client_rect.left + client_rect.width - 290
+        panel_left = game_right - 398
+        chat_top = content_top + 540
+
+        self.client_fixed = False
+        self.minimap_area = Rectangle(panel_left, content_top, 398, 255)
+        self.minimap = Rectangle(panel_left + 45, content_top + 5, 250, 250)
+        self.chat = Rectangle(content_left, chat_top, panel_left - content_left, content_bottom - chat_top)
+        self.control_panel = Rectangle(panel_left, content_top + 300, 398, content_bottom - content_top - 300)
+
+        self.cp_tabs = []
+        for row, y in enumerate((content_top + 264, content_top + 765)):
+            for column in range(7):
+                self.cp_tabs.append(Rectangle(panel_left + 8 + column * 33, y, 29, 26 if row == 0 else 28))
+        self.__locate_inv_slots(self.control_panel)
+        self.__locate_prayers(self.control_panel)
+        self.__locate_spells(self.control_panel)
+
+        self.game_view = Rectangle(content_left, content_top, game_right - content_left, content_bottom - content_top)
+        self.game_view.subtract_list = [
+            {"left": self.minimap_area.left - content_left, "top": 0, "width": self.minimap_area.width, "height": self.minimap_area.height},
+            {"left": self.chat.left - content_left, "top": self.chat.top - content_top, "width": self.chat.width, "height": self.chat.height},
+            {"left": self.control_panel.left - content_left, "top": self.control_panel.top - content_top, "width": self.control_panel.width, "height": self.control_panel.height},
+        ]
+        self.mouseover = Rectangle(content_left, content_top, min(407, self.game_view.width), 26)
 
     def __locate_chat(self, client_rect: Rectangle) -> bool:
         """

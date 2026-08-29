@@ -1,7 +1,6 @@
 import time
 from typing import List
 
-import pyautogui as pag
 import pytweening
 
 import utilities.api.item_ids as item_ids

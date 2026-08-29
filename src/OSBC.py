@@ -11,7 +11,6 @@ from tktooltip import ToolTip
 import utilities.settings as settings
 from controller.bot_controller import BotController, MockBotController
 from model import Bot, RuneLiteBot
-from utilities.game_launcher import Launchable
 from view import *
 from view.fonts.fonts import *
 
@@ -29,10 +28,6 @@ class App(customtkinter.CTk):
         self.__init_settings()
         if not test:
             ui_images_path = pathlib.Path(__file__).parent.resolve().joinpath("images", "ui")
-            self.img_rocket = ImageTk.PhotoImage(
-                Image.open(ui_images_path.joinpath("rocket.png")).resize((12, 12)),
-                Image.Resampling.LANCZOS,
-            )
             self.img_settings = ImageTk.PhotoImage(
                 Image.open(ui_images_path.joinpath("options.png")).resize((12, 12)),
                 Image.Resampling.LANCZOS,
@@ -66,18 +61,6 @@ class App(customtkinter.CTk):
         self.views: dict[str, customtkinter.CTkFrame] = {}  # A map of all views, keyed by game title
         self.models: dict[str, Bot] = {}  # A map of all models (bots), keyed by bot title
 
-        # Home Views
-        self.home_view = TitleView(parent=self.frame_right, main=self)
-        self.home_view.pack(
-            in_=self.frame_right,
-            side=tkinter.TOP,
-            fill=tkinter.BOTH,
-            expand=True,
-            padx=0,
-            pady=0,
-        )
-        self.views["Select a game"] = self.home_view
-
         # Script view and controller [DO NOT EDIT]
         # self.views["Script"] is a dynamically changing view on frame_right that changes based on the model assigned to the controller
         self.views["Script"] = BotView(parent=self.frame_right)
@@ -89,37 +72,22 @@ class App(customtkinter.CTk):
         # Configure grid layout
         self.frame_left.grid_columnconfigure(0, weight=0)  # label
         self.frame_left.grid_columnconfigure(1, weight=0)  # dropdown
-        self.frame_left.grid_rowconfigure(2, weight=1)  # buttons
+        self.frame_left.grid_rowconfigure(1, weight=1)  # buttons
         self.frame_left.grid_rowconfigure(3, weight=0)  # settings
 
-        # Label and dropdown menu inside the scrollable frame
+        # Label inside the scrollable frame
         self.label_1 = customtkinter.CTkLabel(master=self.frame_left, text="Scripts", font=heading_font())
         self.label_1.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
 
         # Create Scrollable Frame
         self.scrollable_frame_left = customtkinter.CTkScrollableFrame(master=self.frame_left, width=160, fg_color="#2b2b2b", scrollbar_button_color="#333333")
-        self.scrollable_frame_left.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
+        self.scrollable_frame_left.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
 
         # ============ Bot/Button Configuration (scrollable_frame_left) ============
         # Dynamically import all bots from the model folder and add them to the UI
         # If your bot is not appearing, make sure it is referenced in the __init__.py file of the folder it exists in.
 
-        # Button map
-        # Key value pairs of game titles and a list of buttons for that game.
-        # This is populated below.
-        self.btn_map: dict[str, List[customtkinter.CTkButton]] = {
-            "Select a game": [],
-        }
-
-        # Dropdown menu for selecting a game
-        self.menu_game_selector = customtkinter.CTkOptionMenu(
-            master=self.frame_left,
-            font=body_large_font(),
-            dropdown_font=body_med_font(),
-            values=list(self.btn_map.keys()),
-            command=self.__on_game_selector_change,
-        )
-        self.menu_game_selector.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+        self.btn_map: dict[str, List[customtkinter.CTkButton]] = {"OSRS": []}
 
         module = importlib.import_module("model")
         names = dir(module)
@@ -127,20 +95,14 @@ class App(customtkinter.CTk):
             obj = getattr(module, name)
             if obj is not Bot and obj is not RuneLiteBot and isinstance(obj, type) and issubclass(obj, Bot):
                 instance = obj()
+                if instance.game_title != "OSRS":
+                    continue
                 # Make a home view if one doesn't exist
                 if isinstance(instance, RuneLiteBot) and instance.game_title not in self.views:
-                    self.views[instance.game_title] = RuneLiteHomeView(parent=self, main=self, game_title=instance.game_title)
-                elif isinstance(instance, Bot) and instance.game_title not in self.views:
-                    self.views[instance.game_title] = HomeView(parent=self, main=self, game_title=instance.game_title)
-                # Make a button section if one doesn't exist
-                if instance.game_title not in self.btn_map:
-                    self.btn_map[instance.game_title] = []
+                    self.views[instance.game_title] = RuneLiteHomeView(parent=self.frame_right, main=self, game_title=instance.game_title)
                 instance.set_controller(self.controller)
                 self.models[name] = instance
-                self.btn_map[instance.game_title].append(self.__create_button(bot_key=name, launchable=isinstance(instance, Launchable)))
-
-        # Configure the dropdown values to be list(self.btn_map.keys())
-        self.menu_game_selector.configure(values=list(self.btn_map.keys()))
+                self.btn_map[instance.game_title].append(self.__create_button(bot_key=name))
 
         # Settings Button (in the position of the Theme Switch)
         self.btn_settings = customtkinter.CTkButton(
@@ -155,12 +117,23 @@ class App(customtkinter.CTk):
         self.btn_settings.grid(row=3, column=0, pady=(5, 10), padx=5)
 
         # Status variables to track state of views and buttons
-        self.current_home_view: customtkinter.CTkFrame = self.views["Select a game"]
+        self.current_home_view: customtkinter.CTkFrame = self.views["OSRS"]
+        self.current_home_view.pack(
+            in_=self.frame_right,
+            side=tkinter.TOP,
+            fill=tkinter.BOTH,
+            expand=True,
+            padx=0,
+            pady=0,
+        )
         self.current_btn: customtkinter.CTkButton = None
-        self.current_btn_list: List[customtkinter.CTkButton] = None
+        self.current_btn_list: List[customtkinter.CTkButton] = self.btn_map["OSRS"]
+        for r, btn in enumerate(self.current_btn_list, 3):
+            btn.grid(row=r, column=0, sticky="we", padx=10, pady=10)
+        self.toggle_btn_state(enabled=True)
 
     # ============ UI Creation Helpers ============
-    def __create_button(self, bot_key: str, launchable: bool = False):
+    def __create_button(self, bot_key: str):
         """
         Creates a preconfigured button for the bot.
         Args:
@@ -169,8 +142,8 @@ class App(customtkinter.CTk):
         Returns:
             Tkinter.Button - the button created.
         """
-        max_length = 14 if launchable else 18
-        shrink_length = 10 if launchable else 14
+        max_length = 18
+        shrink_length = 14
 
         text: str = self.models[bot_key].bot_title
         if len(text) > max_length:
@@ -185,7 +158,6 @@ class App(customtkinter.CTk):
             text=text,
             fg_color=self.DEFAULT_GRAY,
             font=font,
-            image=self.img_rocket if launchable else None,
             command=lambda: self.__toggle_bot_by_key(bot_key, btn),
         )
 

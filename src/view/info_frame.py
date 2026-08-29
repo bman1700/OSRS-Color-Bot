@@ -6,7 +6,6 @@ from PIL import Image, ImageTk
 from pynput import keyboard
 
 import utilities.settings as settings
-from utilities.game_launcher import Launchable
 from view.fonts.fonts import *
 
 
@@ -65,19 +64,15 @@ class InfoFrame(customtkinter.CTkFrame):
         img_size = 18
         self.img_play = ImageTk.PhotoImage(
             Image.open(f"{PATH}/images/ui/play.png").resize((img_size, img_size)),
-            Image.ANTIALIAS,
+            Image.Resampling.LANCZOS,
         )
         self.img_stop = ImageTk.PhotoImage(
             Image.open(f"{PATH}/images/ui/stop2.png").resize((img_size, img_size)),
-            Image.ANTIALIAS,
+            Image.Resampling.LANCZOS,
         )
         self.img_options = ImageTk.PhotoImage(
             Image.open(f"{PATH}/images/ui/options2.png").resize((img_size, img_size)),
-            Image.ANTIALIAS,
-        )
-        self.img_start = ImageTk.PhotoImage(
-            Image.open(f"{PATH}/images/ui/rocket.png").resize((img_size, img_size)),
-            Image.ANTIALIAS,
+            Image.Resampling.LANCZOS,
         )
 
         self.lbl_controls_title = customtkinter.CTkLabel(
@@ -90,9 +85,17 @@ class InfoFrame(customtkinter.CTkFrame):
 
         # Button frame
         self.btn_frame = customtkinter.CTkFrame(master=self, fg_color=self._fg_color)
-        self.btn_frame.rowconfigure((1, 2, 3), weight=0)
-        self.btn_frame.rowconfigure((0, 4), weight=1)
+        self.btn_frame.rowconfigure((1, 2, 3, 4), weight=0)
+        self.btn_frame.rowconfigure((0, 5), weight=1)
         self.btn_frame.grid(row=1, rowspan=4, column=1, padx=15, sticky="wns")
+
+        self.lbl_remote_pid = customtkinter.CTkLabel(master=self.btn_frame, text="RemoteInput PID", font=small_font())
+        self.lbl_remote_pid.grid(row=1, column=0, pady=(0, 3), sticky="ew")
+        self.entry_remote_pid = customtkinter.CTkEntry(master=self.btn_frame, placeholder_text="RuneLite Java PID", font=small_font(), width=145)
+        saved_pid = settings.get("remote_input_pid")
+        if saved_pid:
+            self.entry_remote_pid.insert(0, str(saved_pid))
+        self.entry_remote_pid.grid(row=2, column=0, pady=(0, 12), padx=5, sticky="ew")
 
         self.btn_play = customtkinter.CTkButton(
             master=self.btn_frame,
@@ -104,7 +107,7 @@ class InfoFrame(customtkinter.CTkFrame):
         )
         self.btn_play.bind("<Enter>", lambda event: self.btn_play.configure(text=f"{settings.keybind_to_text(self.combination_keys)}"))
         self.btn_play.bind("<Leave>", lambda event: self.btn_play.configure(text="Play"))
-        self.btn_play.grid(row=1, column=0, pady=(0, 15), sticky="nsew")
+        self.btn_play.grid(row=3, column=0, pady=(0, 15), sticky="nsew")
 
         self.btn_stop = customtkinter.CTkButton(
             master=self.btn_frame,
@@ -129,18 +132,7 @@ class InfoFrame(customtkinter.CTkFrame):
             image=self.img_options,
             command=self.options_btn_clicked,
         )
-        self.btn_options.grid(row=2, column=0, pady=0, sticky="nsew")
-
-        self.btn_launch = customtkinter.CTkButton(
-            master=self.btn_frame,
-            text="Launch Game",
-            font=button_med_font(),
-            text_color="white",
-            fg_color="#616161",
-            image=self.img_start,
-            command=self.launch_btn_clicked,
-        )
-        self.btn_launch.configure(state=tkinter.DISABLED)
+        self.btn_options.grid(row=4, column=0, pady=0, sticky="nsew")
 
         self.lbl_status = customtkinter.CTkLabel(master=self, text="Status: Idle", font=small_font(), justify=tkinter.CENTER)
         self.lbl_status.grid(row=5, column=1, pady=(0, 15), sticky="we")
@@ -156,15 +148,12 @@ class InfoFrame(customtkinter.CTkFrame):
         self.lbl_script_title.configure(text=title)
         self.lbl_script_desc.configure(text=description)
         self.lbl_status.configure(text="Status: Idle")
-        if self.controller.model:
-            if isinstance(self.controller.model, Launchable):
-                self.btn_launch.grid(row=3, column=0, pady=15, sticky="nsew")
-                self.btn_launch.configure(state=tkinter.DISABLED)
-            else:
-                self.btn_launch.grid_forget()
 
     # ---- Button Listeners ----
     def play_btn_clicked(self):
+        if not self.controller.configure_remote_input(self.entry_remote_pid.get()):
+            return
+        settings.set("remote_input_pid", self.entry_remote_pid.get().strip())
         self.controller.play()
 
     def stop_btn_clicked(self):
@@ -174,7 +163,6 @@ class InfoFrame(customtkinter.CTkFrame):
         """
         Creates a new TopLevel view to display bot options.
         """
-        self.btn_launch.configure(state=tkinter.DISABLED)
         window = customtkinter.CTkToplevel(master=self)
         window.title("Options")
         window.protocol("WM_DELETE_WINDOW", lambda arg=window: self.on_options_closing(arg))
@@ -186,9 +174,6 @@ class InfoFrame(customtkinter.CTkFrame):
     def on_options_closing(self, window):
         self.controller.abort_options()
         window.destroy()
-
-    def launch_btn_clicked(self):
-        self.controller.launch_game()
 
     # ---- Keyboard Interrupt Handlers ----
     def start_keyboard_listener(self):
@@ -208,7 +193,7 @@ class InfoFrame(customtkinter.CTkFrame):
             if self.status == "running":
                 self.controller.stop()
             elif self.status == "stopped":
-                self.controller.play()
+                self.play_btn_clicked()
                 self.pressed = False
                 self.current_keys.clear()
 
@@ -222,26 +207,23 @@ class InfoFrame(customtkinter.CTkFrame):
         self.__toggle_buttons(True)
         self.btn_options.configure(state=tkinter.DISABLED)
         self.btn_play.grid_forget()
-        self.btn_stop.grid(row=1, column=0, pady=(0, 15), sticky="nsew")
+        self.btn_stop.grid(row=3, column=0, pady=(0, 15), sticky="nsew")
         self.lbl_status.configure(text="Status: Running")
         self.status = "running"
 
     def update_status_stopped(self):
         self.__toggle_buttons(True)
         self.btn_stop.grid_forget()
-        self.btn_play.grid(row=1, column=0, pady=(0, 15), sticky="nsew")
+        self.btn_play.grid(row=3, column=0, pady=(0, 15), sticky="nsew")
         self.lbl_status.configure(text="Status: Stopped")
         self.status = "stopped"
 
     def update_status_configuring(self):
         self.__toggle_buttons(False)
-        self.btn_launch.configure(state=tkinter.DISABLED)
         self.lbl_status.configure(text="Status: Configuring")
 
     def update_status_configured(self):
         self.__toggle_buttons(True)
-        if isinstance(self.controller.model, Launchable):
-            self.btn_launch.configure(state=tkinter.NORMAL)
         self.lbl_status.configure(text="Status: Configured")
 
     def __toggle_buttons(self, enabled: bool):

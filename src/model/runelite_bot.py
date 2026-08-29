@@ -14,7 +14,6 @@ import time
 from abc import ABCMeta
 from typing import List, Union
 
-import pyautogui as pag
 from deprecated import deprecated
 
 import utilities.color as clr
@@ -187,7 +186,7 @@ class RuneLiteBot(Bot, metaclass=ABCMeta):
             A RuneLiteObject object or None if no tagged NPCs are found.
         """
         game_view = self.win.game_view
-        img_game_view = game_view.screenshot()
+        img_game_view = self.win.zones.game_view.screenshot()
         # Isolate colors in image
         img_npcs = clr.isolate_colors(img_game_view, clr.CYAN)
         img_fighting_entities = clr.isolate_colors(img_game_view, [clr.GREEN, clr.RED])
@@ -253,5 +252,6 @@ class RuneLiteBot(Bot, metaclass=ABCMeta):
             self.mouse.move_to(rl_login_icon.random_point())
             self.mouse.click()
             time.sleep(0.2)
-            pag.press("enter")
+            self.input_provider.key_down("enter")
+            self.input_provider.key_up("enter")
             time.sleep(1)

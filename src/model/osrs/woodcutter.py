@@ -1,13 +1,12 @@
 import time
+from math import dist
 
 import utilities.api.item_ids as ids
-import utilities.color as clr
 import utilities.random_util as rd
 from model.osrs.osrs_bot import OSRSBot
-from model.runelite_bot import BotStatus
 from utilities.api.morg_http_client import MorgHTTPSocket
 from utilities.api.status_socket import StatusSocket
-from utilities.geometry import RuneLiteObject
+from utilities.hsv_color import HSVColorProfile
 
 
 class OSRSWoodcutter(OSRSBot):
@@ -17,8 +16,10 @@ class OSRSWoodcutter(OSRSBot):
             "This bot power-chops wood. Position your character near some trees, tag them, and press Play.\nTHIS SCRIPT IS AN EXAMPLE, DO NOT USE LONGTERM."
         )
         super().__init__(bot_title=bot_title, description=description)
-        self.running_time = 1
+        self.running_time = 10
         self.take_breaks = False
+        self.options_set = True
+        self.tree_profile = HSVColorProfile.from_rgb("tagged_tree", (255, 0, 231), tolerance=(3, 40, 40), min_area=4)
 
     def create_options(self):
         self.options_builder.add_slider_option("running_time", "How long to run (minutes)?", 1, 500)
@@ -46,8 +47,7 @@ class OSRSWoodcutter(OSRSBot):
         api_s = StatusSocket()
 
         self.log_msg("Selecting inventory...")
-        self.mouse.move_to(self.win.cp_tabs[3].random_point())
-        self.mouse.click()
+        self.runtime.actions.click_at(self.win.cp_tabs[3].random_point())
 
         self.logs = 0
         failed_searches = 0
@@ -68,8 +68,9 @@ class OSRSWoodcutter(OSRSBot):
             if api_s.get_is_inv_full():
                 self.__drop_logs(api_s)
 
-            # If our mouse isn't hovering over a tree, and we can't find another tree...
-            if not self.mouseover_text(contains="Chop", color=clr.OFF_WHITE) and not self.__move_mouse_to_nearest_tree():
+            # Select a fresh tagged tree each cycle; marker detection replaces the
+            # old hover-text OCR check for this scaled client layout.
+            if not self.__move_mouse_to_nearest_tree():
                 failed_searches += 1
                 if failed_searches % 10 == 0:
                     self.log_msg("Searching for trees...")
@@ -80,10 +81,10 @@ class OSRSWoodcutter(OSRSBot):
                 continue
             failed_searches = 0  # If code got here, a tree was found
 
-            # Click if the mouseover text assures us we're clicking a tree
-            if not self.mouseover_text(contains="Chop", color=clr.OFF_WHITE):
-                continue
-            self.mouse.click()
+            # The tagged-tree detector is the target validation. Legacy hover OCR
+            # is unreliable with the scaled RuneLite client layout.
+            time.sleep(0.1)
+            self.runtime.actions.click()
             time.sleep(0.5)
 
             # While the player is chopping (or moving), wait
@@ -116,19 +117,19 @@ class OSRSWoodcutter(OSRSBot):
         Returns:
             True if success, False otherwise.
         """
-        trees = self.get_all_tagged_in_rect(self.win.game_view, clr.PINK)
-        tree = None
+        trees = self.runtime.vision.find_hsv("game_view", self.tree_profile)
         if not trees:
             return False
         # If we are looking for the next nearest tree, we need to make sure trees has at least 2 elements
         if next_nearest and len(trees) < 2:
             return False
-        trees = sorted(trees, key=RuneLiteObject.distance_from_rect_center)
+        zone = self.win.zones.game_view
+        center = (zone.rectangle.width // 2, zone.rectangle.height // 2)
+        trees = sorted(trees, key=lambda tree: dist(tree.center, center))
         tree = trees[1] if next_nearest else trees[0]
-        if next_nearest:
-            self.mouse.move_to(tree.random_point(), mouseSpeed="slow", knotsCount=2)
-        else:
-            self.mouse.move_to(tree.random_point())
+        # Marker outlines can have thin/irregular masks; their bounding-box center
+        # is a more stable point inside the marked tree than a random box point.
+        self.runtime.actions.move_to(zone.to_screen(tree.center))
         return True
 
     def __drop_logs(self, api_s: StatusSocket):

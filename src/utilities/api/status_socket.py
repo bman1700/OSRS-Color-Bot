@@ -39,6 +39,11 @@ class RLSTATUS(BaseHTTPRequestHandler):
 class StatusSocket:
     gameTick = 0.603
 
+    @staticmethod
+    def _inventory() -> list:
+        """Return an empty inventory while the socket is still initializing."""
+        return player_data.get("inventory") or []
+
     def __init__(self) -> None:
         t_server = Thread(target=self.__RSERVER)
         t_server.daemon = True
@@ -121,7 +126,7 @@ class StatusSocket:
         Returns:
                 True if the player's inventory is full, False otherwise.
         """
-        return len(player_data["inventory"]) >= 28
+        return len(self._inventory()) >= 28
 
     def get_is_inv_empty(self) -> bool:
         """
@@ -129,7 +134,7 @@ class StatusSocket:
         Returns:
                 True if the player's inventory is empty, False otherwise.
         """
-        return len(player_data["inventory"]) == 0
+        return len(self._inventory()) == 0
 
     def get_inv(self) -> list:
         """
@@ -143,7 +148,7 @@ class StatusSocket:
                 for item in inv:
                         print(f"Slot: {item['index']}, Item ID: {item['id']}, Amount: {item['amount']}")
         """
-        return player_data["inventory"]
+        return self._inventory()
 
     def get_inv_item_indices(self, item_id: Union[List[int], int]) -> list:
         """
@@ -154,7 +159,7 @@ class StatusSocket:
         Returns:
                 A list of inventory slot indexes that the item exists in.
         """
-        inv = player_data["inventory"]
+        inv = self._inventory()
         if isinstance(item_id, int):
             return [slot["index"] for slot in inv if slot["id"] == item_id]
         elif isinstance(item_id, list):
@@ -170,7 +175,7 @@ class StatusSocket:
         Returns:
                 The total amount of that item in your inventory.
         """
-        inv = player_data["inventory"]
+        inv = self._inventory()
         if isinstance(item_id, int):
             item_id = [item_id]
         if result := next((item for item in inv if item["id"] in item_id), None):
@@ -190,7 +195,7 @@ class StatusSocket:
         # run a loop for 0.6 second
         start_time = time.time()
         while time.time() - start_time < 0.8:
-            if player_data["attack"]["animationId"] != -1:
+            if player_data.get("attack", {}).get("animationId", -1) != -1:
                 return False
         return True
 

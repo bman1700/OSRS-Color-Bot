@@ -20,6 +20,18 @@ class BotController(object):
         """
         self.model.play()
 
+    def configure_remote_input(self, process_id: str) -> bool:
+        """Validate and apply the Java PID selected in the UI."""
+        try:
+            pid = int(process_id)
+            if pid <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            self.update_log("Enter a valid RuneLite Java process ID before starting.")
+            return False
+        self.model.configure_remote_input(pid)
+        return True
+
     def stop(self):
         """
         Stop btn clicked on view.

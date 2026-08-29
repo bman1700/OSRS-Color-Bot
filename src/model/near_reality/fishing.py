@@ -1,6 +1,5 @@
 import time
 
-import pyautogui as pag
 
 import utilities.api.item_ids as ids
 import utilities.color as clr
@@ -68,7 +67,7 @@ class NRFishing(NRBot):
                 else:
                     self.log_msg("Clicking fishing spot...")
                     self.mouse.move_to(spot.random_point())
-                    pag.click()
+                    self.mouse.click()
                     time.sleep(1)
                     break
             time.sleep(3)

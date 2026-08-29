@@ -14,7 +14,6 @@ from typing import List, Union
 
 import customtkinter
 import numpy as np
-import pyautogui as pag
 import pytweening
 from deprecated import deprecated
 
@@ -24,9 +23,12 @@ import utilities.imagesearch as imsearch
 import utilities.ocr as ocr
 import utilities.random_util as rd
 from utilities.geometry import Point, Rectangle
+from utilities.input import InputProvider, InputProviderError, RemoteInputProvider
 from utilities.mouse import Mouse
+from utilities.windmouse import WindMouseSettings
 from utilities.options_builder import OptionsBuilder
 from utilities.window import Window, WindowInitializationError
+from runtime import BotRuntime
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -79,7 +81,6 @@ class BotStatus(Enum):
 
 
 class Bot(ABC):
-    mouse = Mouse()
     options_set: bool = False
     progress: float = 0
     status = BotStatus.STOPPED
@@ -101,6 +102,28 @@ class Bot(ABC):
         self.description = description
         self.options_builder = OptionsBuilder(bot_title)
         self.win = window
+        self.mouse = Mouse()
+        self.input_provider: InputProvider | None = None
+        self.runtime = BotRuntime(self.win, self.mouse)
+
+    def configure_remote_input(self, process_id: int) -> None:
+        """Configure the required native input path for this game client."""
+        self.input_provider = RemoteInputProvider(process_id=process_id)
+        self.runtime.set_input_provider(self.input_provider)
+
+    def set_input_provider(self, provider: InputProvider) -> None:
+        """Inject a provider for tests or an already-configured runtime."""
+        self.input_provider = provider
+        self.runtime.set_input_provider(provider)
+
+    def configure_movement(self, strategy: str = "direct", windmouse_settings: WindMouseSettings | None = None) -> None:
+        """Configure movement for future mouse actions without changing scripts."""
+        if strategy not in {"direct", "windmouse"}:
+            raise ValueError("Unknown movement strategy. Use 'direct' or 'windmouse'.")
+        self.movement_strategy = strategy
+        self.mouse.set_movement_strategy(strategy)
+        if windmouse_settings is not None:
+            self.mouse.set_windmouse_settings(windmouse_settings)
 
     @abstractmethod
     def main_loop(self):
@@ -148,9 +171,12 @@ class Bot(ABC):
                 self.log_msg("Options not set. Please set options before starting.")
                 return
             try:
-                self.__initialize_window()
+                self.runtime.start()
             except WindowInitializationError as e:
                 self.log_msg(str(e))
+                return
+            except InputProviderError as e:
+                self.log_msg(f"RemoteInput initialization failed: {e}")
                 return
             self.reset_progress()
             self.set_status(BotStatus.RUNNING)
@@ -162,14 +188,6 @@ class Bot(ABC):
         elif self.status == BotStatus.CONFIGURING:
             self.log_msg("Please finish configuring the bot before starting.")
 
-    def __initialize_window(self):
-        """
-        Attempts to focus and initialize the game window by identifying core UI elements.
-        """
-        self.win.focus()
-        time.sleep(0.5)
-        self.win.initialize()
-
     def stop(self):
         """
         Fired when the user stops the bot manually.
@@ -178,6 +196,8 @@ class Bot(ABC):
         if self.status != BotStatus.STOPPED:
             self.set_status(BotStatus.STOPPED)
             self.thread.stop()
+        if self.input_provider is not None:
+            self.runtime.stop()
             self.thread.join()
         else:
             self.log_msg("Bot is already stopped.")
@@ -248,7 +268,7 @@ class Bot(ABC):
             row_skip = list(range(skip_rows * 4))
             skip_slots = np.unique(row_skip + skip_slots)
         # Start dropping
-        pag.keyDown("shift")
+        self.input_provider.key_down("shift")
         for i, slot in enumerate(self.win.inventory_slots):
             if i in skip_slots:
                 continue
@@ -262,7 +282,7 @@ class Bot(ABC):
                 tween=pytweening.easeInOutQuad,
             )
             self.mouse.click()
-        pag.keyUp("shift")
+        self.input_provider.key_up("shift")
 
     def drop(self, slots: List[int]) -> None:
         """
@@ -271,7 +291,7 @@ class Bot(ABC):
             slots: The indices of slots to drop.
         """
         self.log_msg("Dropping items...")
-        pag.keyDown("shift")
+        self.input_provider.key_down("shift")
         for i, slot in enumerate(self.win.inventory_slots):
             if i not in slots:
                 continue
@@ -285,7 +305,7 @@ class Bot(ABC):
                 tween=pytweening.easeInOutQuad,
             )
             self.mouse.click()
-        pag.keyUp("shift")
+        self.input_provider.key_up("shift")
 
     def friends_nearby(self) -> bool:
         """
@@ -293,7 +313,7 @@ class Bot(ABC):
         Returns:
             True if friends are nearby, False otherwise.
         """
-        minimap = self.win.minimap.screenshot()
+        minimap = self.win.zones.minimap.screenshot()
         # debug.save_image("minimap.png", minimap)
         only_friends = clr.isolate_colors(minimap, [clr.GREEN])
         # debug.save_image("minimap_friends.png", only_friends)
@@ -485,9 +505,9 @@ class Bot(ABC):
         direction_v = "down" if vertical < 0 else "up"
 
         def keypress(direction, duration):
-            pag.keyDown(direction)
+            self.input_provider.key_down(direction)
             time.sleep(duration)
-            pag.keyUp(direction)
+            self.input_provider.key_up(direction)
 
         thread_h = threading.Thread(target=keypress, args=(direction_h, sleep_h), daemon=True)
         thread_v = threading.Thread(target=keypress, args=(direction_v, sleep_v), daemon=True)

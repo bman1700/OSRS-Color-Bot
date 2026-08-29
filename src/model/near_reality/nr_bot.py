@@ -5,7 +5,6 @@ be inherited by NR script classes.
 import time
 from abc import ABCMeta
 
-import pyautogui as pag
 
 from model.runelite_bot import RuneLiteBot, RuneLiteWindow
 from utilities.geometry import Point
@@ -23,10 +22,10 @@ class NRBot(RuneLiteBot, metaclass=ABCMeta):
         """
         self.log_msg("Disabling private chat...")
         self.mouse.move_to(self.win.chat_tabs[3].random_point())
-        pag.rightClick()
+        self.mouse.right_click()
         time.sleep(0.05)
         self.mouse.move_rel(0, -28, 5, 2)
-        pag.click()
+        self.mouse.click()
 
     # # -- Banking --
     # def close_bank(self):
