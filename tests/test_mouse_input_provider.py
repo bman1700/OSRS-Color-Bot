@@ -20,3 +20,16 @@ def test_mouse_translates_screen_coordinates_for_input_provider():
         ("mouse_down", ("right",)),
         ("mouse_up", ("right",)),
     ]
+
+
+def test_mouse_red_click_check_uses_configured_fail_closed_verifier():
+    provider = MockInputProvider()
+    provider.connect()
+    mouse = Mouse(provider, coordinate_origin=(100, 200))
+    mouse.move_to((130, 240))
+    mouse.set_red_click_verifier(lambda point: point == (130, 240))
+
+    assert mouse.click(check_red_click=True) is True
+
+    mouse.set_red_click_verifier(None)
+    assert mouse.click(check_red_click=True) is False

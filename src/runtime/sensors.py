@@ -42,6 +42,15 @@ class SensorSnapshot:
             return 0
         return int(item.get("amount", item.get("quantity", 0)))
 
+    def item_indices_by_name(self, name: str, catalog) -> list[int]:
+        """Resolve a configured item name through a catalog, then inspect IDs.
+
+        Runtime matching remains ID-based; names are only a configuration
+        convenience and unknown names safely produce no matches.
+        """
+        item_id = catalog.get_id(name)
+        return self.item_indices(item_id) if item_id is not None else []
+
 
 class SensorService:
     """Normalize a status-socket-shaped payload without requiring a live socket."""
@@ -75,3 +84,8 @@ class SensorService:
             animation_id=animation_id,
             raw=payload,
         )
+
+    def temporal(self, *, stale_after: float | None = None):
+        """Create temporal predicates over this service without changing snapshots."""
+        from runtime.temporal import TemporalSensors
+        return TemporalSensors(self.snapshot, stale_after=stale_after)

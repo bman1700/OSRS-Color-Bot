@@ -145,19 +145,32 @@ class Window:
         return True
 
     def __initialize_layout_fallback(self, client_rect: Rectangle) -> None:
-        """Initialize the common RuneLite resizable layout when templates are scaled."""
+        """Initialize a scaled/resizable layout when fixed templates do not match.
+
+        Template discovery is intentionally best-effort: the inventory template
+        only matches when the Inventory tab is active, and all templates are
+        sensitive to display scaling.  The fallback uses the stable proportions
+        of the current client instead of the old fixed-width coordinates.
+        """
         content_left = client_rect.left + 8
         content_top = client_rect.top + 30
         content_bottom = client_rect.top + client_rect.height - 7
-        game_right = client_rect.left + client_rect.width - 290
-        panel_left = game_right - 398
-        chat_top = content_top + 540
+        # RuneLite's plugin sidebar can be open on the right.  It is part of
+        # the OS window bounds but not part of the game canvas, so remove its
+        # approximate 18% width before deriving the game/control-panel split.
+        has_sidebar = client_rect.width > 1350
+        canvas_width = round(client_rect.width * 0.82) if has_sidebar else client_rect.width
+        right_inset = 0 if has_sidebar else 40
+        panel_left = client_rect.left + canvas_width - 398 - right_inset
+        game_right = panel_left
+        chat_top = content_top + round((content_bottom - content_top) * 0.67)
+        panel_top = content_top + round((content_bottom - content_top) * 0.33)
 
         self.client_fixed = False
-        self.minimap_area = Rectangle(panel_left, content_top, 398, 255)
+        self.minimap_area = Rectangle(panel_left, content_top, 398, panel_top - content_top)
         self.minimap = Rectangle(panel_left + 45, content_top + 5, 250, 250)
         self.chat = Rectangle(content_left, chat_top, panel_left - content_left, content_bottom - chat_top)
-        self.control_panel = Rectangle(panel_left, content_top + 300, 398, content_bottom - content_top - 300)
+        self.control_panel = Rectangle(panel_left, panel_top, 398, content_bottom - panel_top)
 
         self.cp_tabs = []
         for row, y in enumerate((content_top + 264, content_top + 765)):

@@ -75,3 +75,33 @@ We've ditched machine learned OCR in favor of a much faster and more reliable cu
   </a>
 </p>
 -->
+# OS-Bot-COLOR
+
+## Item names and Wiki sprites
+
+Bot state should use RuneLite inventory IDs.  When a script configuration is
+written using a human-readable name, resolve it through `ItemCatalog` rather
+than matching pixels:
+
+```python
+from utilities.item_catalog import ItemCatalog
+
+catalog = ItemCatalog.from_builtin_ids()
+logs_id = catalog.require_id("Logs")
+```
+
+Refresh the larger name/ID catalog when needed:
+
+```powershell
+& .\.venv\Scripts\python.exe scripts\update_item_catalog.py
+```
+
+Download visual templates only for UI fallback or verification:
+
+```powershell
+& .\.venv\Scripts\python.exe scripts\download_wiki_sprite.py "Logs" "Dragon axe" --output src/images/bot/items
+```
+
+The downloader resolves files through the Old School Wiki API, stores PNGs,
+and writes a sidecar JSON containing the source URL. Existing files are kept
+unless `--force` is supplied.

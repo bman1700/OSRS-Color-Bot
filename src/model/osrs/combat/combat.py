@@ -16,7 +16,7 @@ class OSRSCombat(OSRSBot, launcher.Launchable):
         bot_title = "Combat"
         description = "This bot kills NPCs. Position your character near some NPCs and highlight them.\nTHIS SCRIPT IS AN EXAMPLE, DO NOT USE LONGTERM."
         super().__init__(bot_title=bot_title, description=description)
-        self.running_time: int = 1
+        self.running_time: int = 5
         self.loot_items: str = ""
         self.hp_threshold: int = 0
 
@@ -101,6 +101,7 @@ class OSRSCombat(OSRSBot, launcher.Launchable):
         start_time = time.time()
         end_time = self.running_time * 60
         while time.time() - start_time < end_time:
+            self.cancellation.raise_if_cancelled()
             # If inventory is full...
             if self.runtime.snapshot().inventory_full:
                 self.log_msg("Inventory is full. Idk what to do.")
@@ -109,6 +110,7 @@ class OSRSCombat(OSRSBot, launcher.Launchable):
 
             # While not in combat
             while not api_morg.get_is_in_combat():
+                self.cancellation.raise_if_cancelled()
                 # Find a target
                 target = self.get_nearest_tagged_NPC()
                 if target is None:
@@ -119,7 +121,7 @@ class OSRSCombat(OSRSBot, launcher.Launchable):
                         # If we've been searching for a whole minute...
                         self.__logout("No tagged targets found. Logging out.")
                         return
-                    time.sleep(1)
+                    self.wait(1)
                     continue
                 failed_searches = 0
 
@@ -128,14 +130,15 @@ class OSRSCombat(OSRSBot, launcher.Launchable):
                 if not self.mouseover_text(contains="Attack", color=clr.OFF_WHITE):
                     continue
                 self.mouse.click()
-                time.sleep(0.5)
+                self.wait(0.5)
 
             # While in combat
             while api_morg.get_is_in_combat():
+                self.cancellation.raise_if_cancelled()
                 # Check to eat food
                 if self.get_hp() < self.hp_threshold:
                     self.__eat()
-                time.sleep(1)
+                self.wait(1)
 
             # Loot all highlighted items on the ground
             if self.loot_items:
@@ -168,9 +171,9 @@ class OSRSCombat(OSRSBot, launcher.Launchable):
             for _ in range(5):  # give the bot 5 seconds to pick up the loot
                 if self.runtime.snapshot().inventory_count != curr_inv:
                     self.log_msg("Loot picked up.")
-                    time.sleep(1)
+                    self.wait(1)
                     break
-                time.sleep(1)
+                self.wait(1)
 
     def __logout(self, msg):
         self.log_msg(msg)

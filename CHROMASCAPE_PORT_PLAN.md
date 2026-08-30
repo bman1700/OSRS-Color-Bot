@@ -10,6 +10,17 @@ RemoteInput is a native Java-process integration, so the Python implementation w
 
 ## Implementation progress (2026-08-28)
 
+### Completed: bot-mechanics hardening and item asset workflow (2026-08-29)
+
+- Added cancellation-aware runtime actions, temporal sensor predicates, verified and transactional actions, navigation helpers, telemetry, and session planning around the shared RemoteInput path.
+- Added a default woodcutting test mode that exercises highlighted-tree detection, tree interaction verification, inventory log dropping, and minimap movement.
+- Removed obsolete per-script WinMouse/runtime controls from the shared UI. Scripts now default to a five-minute runtime.
+- Added `ItemCatalog` so scripts can resolve human-readable item names to RuneLite IDs while keeping runtime inventory decisions ID-based.
+- Added `SensorSnapshot.item_indices_by_name` as a safe configuration-boundary convenience.
+- Added `WikiSpriteClient` and CLI tooling to download OSRS Wiki PNG sprites with source metadata sidecars; screenshots are only needed for visual fallbacks and verification.
+- Added catalog refresh tooling backed by the Wiki price/mapping endpoint and documented both workflows in `README.md`.
+- Added unit coverage for the item catalog, name-based sensor lookup, and Wiki sprite downloader. The full suite passes (`71 passed`).
+
 ### Completed: RemoteInput foundation and legacy action routing
 
 - Added an `InputProvider` abstraction with `MockInputProvider` for tests and `RemoteInputProvider` for production.

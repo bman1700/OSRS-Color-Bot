@@ -5,6 +5,7 @@ Serves as the mediator between a bot and the UI. Methods should likely not be mo
 from model.bot import Bot, BotStatus
 from view.bot_view import BotView
 from utilities.windmouse import WindMouseSettings
+from runtime.config import InputSettings, RuntimeConfig, SessionSettings, VerificationSettings
 
 
 class BotController(object):
@@ -66,6 +67,28 @@ class BotController(object):
             self.update_log(f"Invalid WindMouse settings: {error}")
             return False
 
+    def configure_runtime(self, *, cadence_hz: str, max_attempts: str,
+                          retry_delay_seconds: str, telemetry_enabled: bool,
+                          telemetry_capacity: str = "512") -> bool:
+        """Apply advanced runtime controls collected by the settings view."""
+        try:
+            config = RuntimeConfig(
+                process_id=getattr(self.model.runtime.input_provider, "process_id", None),
+                dll_path=str(getattr(self.model.runtime.input_provider, "dll_path", "")) or None,
+                windmouse=self.model.mouse.windmouse_settings,
+                input=InputSettings(float(cadence_hz)),
+                verification=VerificationSettings(int(max_attempts), float(retry_delay_seconds)),
+                navigation=self.model.runtime.navigation_policy,
+                session=SessionSettings(),
+                telemetry_enabled=bool(telemetry_enabled),
+                telemetry_capacity=int(telemetry_capacity),
+            )
+            self.model.runtime.apply_config(config)
+            return True
+        except (TypeError, ValueError) as error:
+            self.update_log(f"Invalid runtime settings: {error}")
+            return False
+
     def stop(self):
         """
         Stop btn clicked on view.
@@ -109,7 +132,7 @@ class BotController(object):
         status = self.model.status if status is None else status
         if status == BotStatus.RUNNING:
             self.view.frame_info.update_status_running()
-        elif status == BotStatus.STOPPED:
+        elif status in (BotStatus.STOPPED, BotStatus.FAILED_SAFE):
             self.view.frame_info.update_status_stopped()
         elif status == BotStatus.CONFIGURING:
             self.view.frame_info.update_status_configuring()

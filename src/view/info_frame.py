@@ -86,7 +86,7 @@ class InfoFrame(customtkinter.CTkFrame):
 
         # Button frame
         self.btn_frame = customtkinter.CTkFrame(master=self, fg_color=self._fg_color)
-        self.btn_frame.rowconfigure((1, 2, 3, 4, 5, 6, 7, 8, 9), weight=0)
+        self.btn_frame.rowconfigure((1, 2, 3, 4), weight=0)
         self.btn_frame.rowconfigure((0, 10), weight=1)
         self.btn_frame.grid(row=1, rowspan=4, column=1, padx=15, sticky="wns")
 
@@ -106,18 +106,6 @@ class InfoFrame(customtkinter.CTkFrame):
             self.entry_remote_dll.insert(0, str(saved_dll))
         self.entry_remote_dll.grid(row=4, column=0, pady=(0, 12), padx=5, sticky="ew")
 
-        self.lbl_windmouse = customtkinter.CTkLabel(master=self.btn_frame, text="WindMouse (mandatory)", font=small_font())
-        self.lbl_windmouse.grid(row=5, column=0, pady=(0, 3), sticky="ew")
-        self.windmouse_frame = customtkinter.CTkFrame(master=self.btn_frame, fg_color="transparent")
-        self.windmouse_frame.grid(row=6, column=0, pady=(0, 12), padx=5, sticky="ew")
-        self.windmouse_entries = []
-        for column, (label, key, default) in enumerate((("G", "windmouse_gravity", 9.0), ("W", "windmouse_wind", 3.0), ("Step", "windmouse_max_step", 12.0))):
-            customtkinter.CTkLabel(self.windmouse_frame, text=label, font=small_font()).grid(row=0, column=column, padx=2)
-            entry = customtkinter.CTkEntry(self.windmouse_frame, width=42, font=small_font())
-            entry.insert(0, str(settings.get(key) if settings.get(key) is not None else default))
-            entry.grid(row=1, column=column, padx=2)
-            self.windmouse_entries.append((key, entry))
-
         self.btn_play = customtkinter.CTkButton(
             master=self.btn_frame,
             text="Play",
@@ -128,7 +116,7 @@ class InfoFrame(customtkinter.CTkFrame):
         )
         self.btn_play.bind("<Enter>", lambda event: self.btn_play.configure(text=f"{settings.keybind_to_text(self.combination_keys)}"))
         self.btn_play.bind("<Leave>", lambda event: self.btn_play.configure(text="Play"))
-        self.btn_play.grid(row=7, column=0, pady=(0, 15), sticky="nsew")
+        self.btn_play.grid(row=5, column=0, pady=(0, 15), sticky="nsew")
 
         self.btn_stop = customtkinter.CTkButton(
             master=self.btn_frame,
@@ -153,7 +141,7 @@ class InfoFrame(customtkinter.CTkFrame):
             image=self.img_options,
             command=self.options_btn_clicked,
         )
-        self.btn_options.grid(row=8, column=0, pady=0, sticky="nsew")
+        self.btn_options.grid(row=6, column=0, pady=0, sticky="nsew")
 
         self.btn_vision_debug = customtkinter.CTkButton(
             master=self.btn_frame,
@@ -161,7 +149,7 @@ class InfoFrame(customtkinter.CTkFrame):
             font=button_med_font(),
             command=self.vision_debug_btn_clicked,
         )
-        self.btn_vision_debug.grid(row=9, column=0, pady=(8, 0), sticky="nsew")
+        self.btn_vision_debug.grid(row=7, column=0, pady=(8, 0), sticky="nsew")
 
         self.lbl_status = customtkinter.CTkLabel(master=self, text="Status: Idle", font=small_font(), justify=tkinter.CENTER)
         self.lbl_status.grid(row=5, column=1, pady=(0, 15), sticky="we")
@@ -182,9 +170,6 @@ class InfoFrame(customtkinter.CTkFrame):
             self.entry_remote_dll.delete(0, tkinter.END)
             if config.dll_path:
                 self.entry_remote_dll.insert(0, config.dll_path)
-            for (_, entry), value in zip(self.windmouse_entries, (config.windmouse.gravity, config.windmouse.wind, config.windmouse.max_step)):
-                entry.delete(0, tkinter.END)
-                entry.insert(0, str(value))
 
     def setup(self, title, description):
         self.lbl_script_title.configure(text=title)
@@ -195,13 +180,8 @@ class InfoFrame(customtkinter.CTkFrame):
     def play_btn_clicked(self):
         if not self.controller.configure_remote_input(self.entry_remote_pid.get(), self.entry_remote_dll.get()):
             return
-        values = tuple(entry.get().strip() for _, entry in self.windmouse_entries)
-        if not self.controller.configure_windmouse(values):
-            return
         settings.set("remote_input_pid", self.entry_remote_pid.get().strip())
         settings.set("remote_input_dll_path", self.entry_remote_dll.get().strip())
-        for (key, _), value in zip(self.windmouse_entries, values):
-            settings.set(key, value)
         self.controller.save_runtime_config()
         self.controller.play()
 
@@ -260,14 +240,14 @@ class InfoFrame(customtkinter.CTkFrame):
         self.__toggle_buttons(True)
         self.btn_options.configure(state=tkinter.DISABLED)
         self.btn_play.grid_forget()
-        self.btn_stop.grid(row=7, column=0, pady=(0, 15), sticky="nsew")
+        self.btn_stop.grid(row=5, column=0, pady=(0, 15), sticky="nsew")
         self.lbl_status.configure(text="Status: Running")
         self.status = "running"
 
     def update_status_stopped(self):
         self.__toggle_buttons(True)
         self.btn_stop.grid_forget()
-        self.btn_play.grid(row=7, column=0, pady=(0, 15), sticky="nsew")
+        self.btn_play.grid(row=5, column=0, pady=(0, 15), sticky="nsew")
         self.lbl_status.configure(text="Status: Stopped")
         self.status = "stopped"
 

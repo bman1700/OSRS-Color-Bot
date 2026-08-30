@@ -14,7 +14,7 @@ class OSRSTemplate(OSRSBot):
         description = "<Script description here>"
         super().__init__(bot_title=bot_title, description=description)
         # Set option variables below (initial value is only used during headless testing)
-        self.running_time = 1
+        self.running_time = 5
 
     def create_options(self):
         """
@@ -78,7 +78,9 @@ class OSRSTemplate(OSRSBot):
             # -- Perform bot actions here --
             # Code within this block will LOOP until the bot is stopped.
 
+            self.cancellation.raise_if_cancelled()
             self.update_progress((time.time() - start_time) / end_time)
+            self.wait(0.1)
 
         self.update_progress(1)
         self.log_msg("Finished.")

@@ -2,8 +2,6 @@
 A Bot is a base class for bot script models. It is abstract and cannot be instantiated. Many of the methods in this base class are
 pre-implemented and can be used by subclasses, or called by the controller. Code in this class should not be modified.
 """
-import ctypes
-import platform
 import re
 import threading
 import time
@@ -28,15 +26,16 @@ from utilities.mouse import Mouse
 from utilities.windmouse import WindMouseSettings
 from utilities.options_builder import OptionsBuilder
 from utilities.window import Window, WindowInitializationError
-from runtime import BotRuntime
+from runtime import ActionTimeoutError, BotCancelled, BotRuntime, CancellationToken, wait_for
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
 class BotThread(threading.Thread):
-    def __init__(self, target: callable):
-        threading.Thread.__init__(self)
+    def __init__(self, target: callable, cancellation: CancellationToken | None = None):
+        super().__init__(daemon=True)
         self.target = target
+        self.cancellation = cancellation or CancellationToken()
 
     def run(self):
         try:
@@ -45,27 +44,9 @@ class BotThread(threading.Thread):
         finally:
             print("Thread stopped successfully.")
 
-    def __get_id(self):
-        """Returns id of the respective thread"""
-        if hasattr(self, "_thread_id"):
-            return self._thread_id
-        for id, thread in threading._active.items():
-            if thread is self:
-                return id
-
-    def stop(self):
-        """Raises SystemExit exception in the thread. This can be called from the main thread followed by join()."""
-        thread_id = self.__get_id()
-        if platform.system() == "Windows":
-            res = ctypes.pythonapi.PyThreadState_SetAsyncExc(thread_id, ctypes.py_object(SystemExit))
-            if res > 1:
-                ctypes.pythonapi.PyThreadState_SetAsyncExc(thread_id, 0)
-                print("Exception raise failure")
-        elif platform.system() == "Linux":
-            res = ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(thread_id), ctypes.py_object(SystemExit))
-            if res > 1:
-                ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(thread_id), 0)
-                print("Exception raise failure")
+    def stop(self, reason: str = "Stop requested"):
+        """Request a cooperative stop; never inject an async exception."""
+        self.cancellation.cancel(reason)
 
 
 class BotStatus(Enum):
@@ -78,6 +59,7 @@ class BotStatus(Enum):
     STOPPED = 3
     CONFIGURING = 4
     CONFIGURED = 5
+    FAILED_SAFE = 6
 
 
 class Bot(ABC):
@@ -105,6 +87,7 @@ class Bot(ABC):
         self.mouse = Mouse()
         self.input_provider: InputProvider | None = None
         self.runtime = BotRuntime(self.win, self.mouse)
+        self.cancellation = CancellationToken()
 
     def configure_remote_input(self, process_id: int, dll_path: str | None = None) -> None:
         """Configure the required native input path for this game client."""
@@ -167,7 +150,7 @@ class Bot(ABC):
         Fired when the user starts the bot manually. This function performs necessary set up on the UI
         and locates/initializes the game client window. Then, it launches the bot's main loop in a separate thread.
         """
-        if self.status in [BotStatus.STOPPED, BotStatus.CONFIGURED]:
+        if self.status in [BotStatus.STOPPED, BotStatus.CONFIGURED, BotStatus.FAILED_SAFE]:
             self.clear_log()
             self.log_msg("Starting bot...")
             if not self.options_set:
@@ -182,9 +165,9 @@ class Bot(ABC):
                 self.log_msg(f"RemoteInput initialization failed: {e}")
                 return
             self.reset_progress()
+            self.cancellation = CancellationToken()
             self.set_status(BotStatus.RUNNING)
-            self.thread = BotThread(target=self.main_loop)
-            self.thread.setDaemon(True)
+            self.thread = BotThread(target=self._run_main_loop, cancellation=self.cancellation)
             self.thread.start()
         elif self.status == BotStatus.RUNNING:
             self.log_msg("Bot is already running.")
@@ -196,14 +179,45 @@ class Bot(ABC):
         Fired when the user stops the bot manually.
         """
         self.log_msg("Stopping script.")
-        if self.status != BotStatus.STOPPED:
+        if self.status not in (BotStatus.STOPPED, BotStatus.FAILED_SAFE):
             self.set_status(BotStatus.STOPPED)
-            self.thread.stop()
+            self.cancellation.cancel("Stop requested by user")
         if self.input_provider is not None:
             self.runtime.stop()
-            self.thread.join()
-        else:
-            self.log_msg("Bot is already stopped.")
+        if self.thread is not None and self.thread is not threading.current_thread():
+            self.thread.join(timeout=1.0)
+
+    def should_stop(self) -> bool:
+        """Return whether a stop has been requested for this script run."""
+        return self.cancellation.is_cancelled
+
+    def wait(self, seconds: float) -> bool:
+        """Interruptible replacement for ``time.sleep`` in scripts."""
+        return self.cancellation.wait(seconds)
+
+    def wait_for(self, predicate, timeout: float, interval: float = 0.1, action: str = "action") -> None:
+        """Wait for a state transition with a deadline and cooperative stop."""
+        wait_for(predicate, timeout=timeout, cancellation=self.cancellation, interval=interval, action=action)
+
+    def _run_main_loop(self) -> None:
+        try:
+            self.main_loop()
+        except BotCancelled as error:
+            self.log_msg(f"Script cancelled: {error}")
+        except ActionTimeoutError as error:
+            self._fail_safe(str(error))
+        except Exception as error:
+            self._fail_safe(f"Unhandled script error: {error}")
+        finally:
+            if self.status == BotStatus.RUNNING:
+                self.set_status(BotStatus.STOPPED)
+            self.runtime.stop()
+
+    def _fail_safe(self, reason: str) -> None:
+        """Stop future actions and expose a recoverable failure state to the UI."""
+        self.cancellation.cancel(reason)
+        self.log_msg(f"Fail-safe stop: {reason}")
+        self.set_status(BotStatus.FAILED_SAFE)
 
     # ---- Controller Setter ----
     def set_controller(self, controller):
@@ -330,7 +344,7 @@ class Bot(ABC):
         self.log_msg("Logging out...")
         self.mouse.move_to(self.win.cp_tabs[10].random_point())
         self.mouse.click()
-        time.sleep(1)
+        self.wait(1)
         self.mouse.move_rel(0, -53, 5, 5)
         self.mouse.click()
 
@@ -351,7 +365,7 @@ class Bot(ABC):
         length = round(length)
         for i in range(length):
             self.log_msg(f"Taking a break... {int(length) - i} seconds left.", overwrite=True)
-            time.sleep(1)
+            self.wait(1)
         self.log_msg(f"Done taking {length} second break.", overwrite=True)
 
     # --- Player Status Functions ---
@@ -509,19 +523,21 @@ class Bot(ABC):
 
         def keypress(direction, duration):
             self.input_provider.key_down(direction)
-            time.sleep(duration)
-            self.input_provider.key_up(direction)
+            try:
+                self.wait(duration)
+            finally:
+                self.input_provider.key_up(direction)
 
         thread_h = threading.Thread(target=keypress, args=(direction_h, sleep_h), daemon=True)
         thread_v = threading.Thread(target=keypress, args=(direction_v, sleep_v), daemon=True)
         delay = rd.fancy_normal_sample(0, max(sleep_h, sleep_v))
         if sleep_h > sleep_v:
             thread_h.start()
-            time.sleep(delay)
+            self.wait(delay)
             thread_v.start()
         else:
             thread_v.start()
-            time.sleep(delay)
+            self.wait(delay)
             thread_h.start()
         thread_h.join()
         thread_v.join()
@@ -537,7 +553,7 @@ class Bot(ABC):
         # click the combat tab
         self.mouse.move_to(self.win.cp_tabs[0].random_point())
         self.mouse.click()
-        time.sleep(0.5)
+        self.wait(0.5)
 
         if toggle_on:
             if auto_retal_btn := imsearch.search_img_in_rect(

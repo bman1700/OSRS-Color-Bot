@@ -5,6 +5,7 @@ from runtime import RuntimeEventBus
 from utilities.input import MockInputProvider
 from utilities.mouse import Mouse
 from utilities.zones import ZoneSet
+from runtime.navigation import NavigationPolicy, Tile, NavigationStatus
 
 
 Point = namedtuple("Point", "x y")
@@ -86,3 +87,25 @@ def test_runtime_event_bus_uses_dispatcher_when_configured():
     assert not events
     callbacks.pop()()
     assert events[0].payload == "running"
+
+
+def test_runtime_exposes_injectable_navigation_without_external_provider():
+    class Route:
+        def path(self, start, destination):
+            return [start, destination]
+
+    window = FakeWindow()
+    provider = MockInputProvider()
+    runtime = BotRuntime(window, Mouse())
+    runtime.set_input_provider(provider)
+    runtime.attach_sensor_source(lambda: {"playerPosition": {"x": 0, "y": 0}})
+    runtime.start()
+    runtime.configure_navigation(Route(), policy=NavigationPolicy(
+        horizon_min=1, horizon_max=1, movement_timeout_seconds=.01,
+        arrival_timeout_seconds=.01, poll_interval_seconds=.01,
+    ))
+    # The static position source cannot observe progress, so navigation fails
+    # closed after issuing at most one bounded click.
+    result = runtime.walk_to(Tile(1, 0))
+    runtime.stop()
+    assert result.status is NavigationStatus.MOVEMENT_NOT_CONFIRMED
