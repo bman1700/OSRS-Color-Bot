@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -17,8 +18,9 @@ class InputSettings:
     cadence_hz: float = 60.0
 
     def __post_init__(self):
-        if self.cadence_hz <= 0:
-            raise ValueError("cadence_hz must be positive")
+        if (isinstance(self.cadence_hz, bool) or not isinstance(self.cadence_hz, (int, float))
+                or not math.isfinite(self.cadence_hz) or self.cadence_hz <= 0):
+            raise ValueError("cadence_hz must be a positive finite number")
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,11 @@ class VerificationSettings:
     retry_delay_seconds: float = 0.0
 
     def __post_init__(self):
+        if isinstance(self.max_attempts, bool) or not isinstance(self.max_attempts, int):
+            raise ValueError("max_attempts must be an integer")
+        if (isinstance(self.retry_delay_seconds, bool) or not isinstance(self.retry_delay_seconds, (int, float))
+                or not math.isfinite(self.retry_delay_seconds)):
+            raise ValueError("retry_delay_seconds must be a finite number")
         RetryPolicy(self.max_attempts, self.retry_delay_seconds)
 
     def as_policy(self) -> RetryPolicy:
@@ -53,10 +60,14 @@ class RuntimeConfig:
     telemetry_capacity: int = 512
 
     def __post_init__(self) -> None:
-        if self.process_id is not None and self.process_id <= 0:
-            raise ValueError("process_id must be positive")
-        if self.telemetry_capacity < 1:
-            raise ValueError("telemetry_capacity must be at least one")
+        if self.process_id is not None and (isinstance(self.process_id, bool) or not isinstance(self.process_id, int)
+                                            or self.process_id < 1):
+            raise ValueError("process_id must be a positive integer")
+        if (isinstance(self.telemetry_capacity, bool) or not isinstance(self.telemetry_capacity, int)
+                or self.telemetry_capacity < 1):
+            raise ValueError("telemetry_capacity must be a positive integer")
+        if not isinstance(self.telemetry_enabled, bool):
+            raise ValueError("telemetry_enabled must be a boolean")
 
     def save(self, path: str | Path) -> None:
         payload = asdict(self)

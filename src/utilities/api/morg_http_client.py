@@ -426,12 +426,21 @@ class MorgHTTPSocket:
             0,
         )
 
-    def convert_player_position_to_pixels(self):
+    def convert_player_position_to_pixels(self) -> None:
+        """Raise because the legacy Morg API cannot safely project world tiles.
+
+        A screen projection needs a *target* world point as well as the active
+        viewport dimensions, scale, and terrain height.  This method has no
+        target argument, and the ``events`` payload only exposes the player's
+        world point and an undocumented camera object.  Returning a guessed
+        mouse coordinate could click an unintended in-game target, so callers
+        must use an API that provides a complete, documented projection instead.
         """
-        Convert a world point into coordinate where to click with the mouse to make it possible to move via the socket.
-        TODO: Implement.
-        """
-        pass
+        raise NotImplementedError(
+            "MorgHTTP cannot convert world positions to pixels: its legacy "
+            "payload lacks a target point and the viewport/terrain data "
+            "required for a safe projection."
+        )
 
 
 # sourcery skip: remove-redundant-if

@@ -30,6 +30,7 @@ class Mouse:
         self.windmouse_settings = WindMouseSettings()
         self.input_executor = input_executor or InputExecutor()
         self._red_click_verifier: Callable[[tuple[int, int]], bool] | None = None
+        self._layout_refresh: Callable[[tuple[int, int]], tuple[int, int] | None] | None = None
 
     def set_input_cadence(self, cadence_hz: float) -> None:
         """Set the maximum native-command rate for subsequent mouse actions."""
@@ -53,6 +54,10 @@ class Mouse:
         """Set a post-click visual verifier; no verifier means fail closed."""
         self._red_click_verifier = verifier
 
+    def set_layout_refresh(self, refresh: Callable[[tuple[int, int]], tuple[int, int] | None] | None) -> None:
+        """Install a callback for layout-sensitive input destinations."""
+        self._layout_refresh = refresh
+
     def position(self) -> tuple[int, int]:
         if self.input_provider is None:
             raise RuntimeError("Mouse input provider has not been configured")
@@ -74,6 +79,10 @@ class Mouse:
         if self.input_provider is None:
             raise RuntimeError("Mouse input provider has not been configured")
         dest_x, dest_y = int(destination[0]), int(destination[1])
+        if self._layout_refresh is not None:
+            refreshed_point = self._layout_refresh((dest_x, dest_y))
+            if refreshed_point is not None:
+                dest_x, dest_y = refreshed_point
         cancellation = kwargs.pop("cancellation", None)
         path = generate_path(self.position(), (dest_x, dest_y), self.windmouse_settings)
 
@@ -117,6 +126,8 @@ class Mouse:
         mouse_pos_before = self.position()
         if self.input_provider is None:
             raise RuntimeError("Mouse input provider has not been configured")
+        if self._layout_refresh is not None:
+            self._layout_refresh(mouse_pos_before)
         def deliver(session) -> None:
             session.call(self.input_provider.mouse_down, button)
             if force_delay or self.click_delay:

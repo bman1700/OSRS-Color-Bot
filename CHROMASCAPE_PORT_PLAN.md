@@ -355,9 +355,38 @@ This preserves the current UI while leaving room for a future local web control 
 ### Phase 7 — Stabilization and documentation
 
 - Add unit tests and screenshot-based regression tests. **Complete for the current OSRS fixture set.**
-- Add RemoteInput setup and troubleshooting documentation.
+- Add RemoteInput setup and troubleshooting documentation. **Complete: [`documentation/remote-input-build.md`](documentation/remote-input-build.md) covers the x64 DLL, required exports, architecture/runtime requirements, build placement, and the non-invasive connection validator; [`documentation/remote-input.md`](documentation/remote-input.md) documents the runtime input contract.**
 - Add a native dependency/build guide. **Complete: `documentation/remote-input-build.md`.**
-- Document the security, reliability, and account-risk limitations clearly.
+- Document the security, reliability, and account-risk limitations clearly. **Complete: see [Operational limitations](#operational-limitations) below.**
+
+## Operational limitations
+
+RemoteInput improves the separation between bot actions and desktop input, but it does not make automation safe, undetectable, or universally reliable.
+
+### Security
+
+- RemoteInput is a native DLL that attaches to the selected RuneLite Java process. Use only a DLL built from a trusted source, verify the configured path, and do not run an untrusted native binary with elevated permissions.
+- The configured PID identifies the process that receives input. Confirm that it belongs to the intended RuneLite session before connecting; a valid PID alone does not prove that the target is safe or correct.
+- The application stores local runtime and launcher configuration files. Protect the repository and user profile from untrusted modification, especially where executable or DLL paths are configured.
+
+### Reliability
+
+- The production adapter currently supports Windows x64 with a matching 64-bit Python process, RuneLite Java process, and RemoteInput DLL. Attachment, health checks, and input delivery can still fail because of permissions, process changes, client updates, or native-library incompatibilities.
+- The supported visual baseline is the current RuneLite layout, resolution, scaling, and overlay configuration. Other layouts and display configurations remain outside the validated support boundary.
+- RemoteInput failures are fail-closed: the runtime does not fall back to direct desktop mouse or keyboard input. The validator in `documentation/remote-input-build.md` performs connection, health, and movement-only checks without starting a bot loop or sending clicks or keys.
+- WindMouse changes the movement path only. It is not a reliability guarantee, a detector bypass, or a substitute for validating a script against the active client layout.
+
+### Account and policy risk
+
+- Using automation with an online game may violate the game publisher's terms, and can result in warnings, account restrictions, or permanent bans. The project makes no claim that RemoteInput, pixel/color detection, or WindMouse avoids detection.
+- Users are responsible for reviewing and following the applicable game rules and for accepting any account, data, or service risks before running a script. Never use the tooling as a basis for assuming an account is protected from enforcement.
+
+## Remaining follow-up work
+
+- Broader UI validation for WindMouse and runtime configuration controls remains pending.
+- Additional RuneLite layouts, resolutions, scaling modes, and overlay configurations remain intentionally out of scope.
+- Broader live RemoteInput validation beyond the current supported setup remains intentionally out of scope.
+- The legacy world-to-screen conversion stub in `src/utilities/api/morg_http_client.py` remains unimplemented and is not part of the RemoteInput migration.
 
 ## Success criteria
 

@@ -52,14 +52,10 @@ def launch_runelite(properties_path: Path, game_title: str, use_profile_manager:
                              Toggle True if using RuneLite v1.9.11 or newer.
         profile_name: The name of the profile to overwrite. This is only used if `use_profile_manager` is True. If you set this value, choose something
                       very specific & unique. If a profile is found with this name, it will be overwritten.
-        callback: The function that is called with the output of the process. This function must accept a
-                  string as its only positional argument. This may be called with keyword arguments (see notes).
+        callback: The function that is called with status output from the launcher. It must accept a
+                  string as its only positional argument.
     Returns:
         True if the game was launched successfully, False otherwise.
-    Notes:
-        The callback function may be called with keyword arguments. The following keyword arguments are
-        passed to the callback function:
-            - # TODO: ADD KEYWORD ARGS
     """
     # Try to read the file and parse the JSON data
     data = __read_json(path=EXECUTABLES_PATH, touch_file=True)

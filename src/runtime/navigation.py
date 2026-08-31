@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import math
+import heapq
 import random
 import time
 from typing import Any, Callable, Protocol, Sequence
@@ -33,6 +34,110 @@ class PathProvider(Protocol):
     """Supplies a route inclusive of zero or more waypoints toward a goal."""
 
     def path(self, start: Tile, destination: Tile) -> Sequence[Tile]: ...
+
+
+@dataclass(frozen=True)
+class RouteNode:
+    """A traversable waypoint in a local world-route graph."""
+
+    tile: Tile
+    neighbors: tuple[Tile, ...] = ()
+
+
+class WaypointPathProvider:
+    """Find routes through a supplied traversable waypoint graph.
+
+    This is the local equivalent of the route-provider boundary used by a
+    remote walker. It never invents arbitrary minimap clicks: every returned
+    tile belongs to the configured graph. A small randomized edge penalty can
+    select different valid routes when the graph contains alternatives.
+    """
+
+    def __init__(self, nodes: Sequence[RouteNode], *, randomness: float = 0.15,
+                 rng: random.Random | None = None) -> None:
+        if randomness < 0:
+            raise ValueError("randomness cannot be negative")
+        self.randomness = randomness
+        self.rng = rng or random.Random()
+        self._neighbors = {node.tile: tuple(node.neighbors) for node in nodes}
+        for node in nodes:
+            self._neighbors.setdefault(node.tile, ())
+
+    def path(self, start: Tile, destination: Tile) -> Sequence[Tile]:
+        if start == destination:
+            return [start]
+        if start not in self._neighbors or destination not in self._neighbors:
+            return ()
+
+        open_nodes: list[tuple[float, int, Tile]] = [(0.0, 0, start)]
+        came_from: dict[Tile, Tile] = {}
+        cost_so_far = {start: 0.0}
+        sequence = 0
+        while open_nodes:
+            _, _, current = heapq.heappop(open_nodes)
+            if current == destination:
+                return self._reconstruct(came_from, current)
+            for neighbor in self._neighbors[current]:
+                if neighbor not in self._neighbors or neighbor.plane != current.plane:
+                    continue
+                edge_cost = current.distance_to(neighbor)
+                edge_cost *= 1.0 + self.rng.uniform(0.0, self.randomness)
+                new_cost = cost_so_far[current] + edge_cost
+                if new_cost < cost_so_far.get(neighbor, math.inf):
+                    cost_so_far[neighbor] = new_cost
+                    came_from[neighbor] = current
+                    sequence += 1
+                    priority = new_cost + neighbor.distance_to(destination)
+                    heapq.heappush(open_nodes, (priority, sequence, neighbor))
+        return ()
+
+    @staticmethod
+    def _reconstruct(came_from: dict[Tile, Tile], current: Tile) -> list[Tile]:
+        route = [current]
+        while current in came_from:
+            current = came_from[current]
+            route.append(current)
+        route.reverse()
+        return route
+
+
+class RandomizedDirectPathProvider:
+    """Generate short, varied routes between two nearby tiles.
+
+    This is intended for a configured, obstacle-free local route such as a
+    short trip around a known area. It provides movement variation while
+    keeping every route bounded and ending exactly at the requested tile.
+    Longer or obstacle-heavy journeys should use a collision-aware waypoint
+    graph or external walker instead.
+    """
+
+    def __init__(self, *, tiles_per_step: float = 4.0, lateral_variance: int = 2,
+                 rng: random.Random | None = None) -> None:
+        if tiles_per_step <= 0 or lateral_variance < 0:
+            raise ValueError("tiles_per_step must be positive and lateral_variance cannot be negative")
+        self.tiles_per_step = tiles_per_step
+        self.lateral_variance = lateral_variance
+        self.rng = rng or random.Random()
+
+    def path(self, start: Tile, destination: Tile) -> Sequence[Tile]:
+        if start.plane != destination.plane:
+            return ()
+        distance = start.distance_to(destination)
+        steps = max(1, math.ceil(distance / self.tiles_per_step))
+        dx, dy = destination.x - start.x, destination.y - start.y
+        length = math.hypot(dx, dy) or 1.0
+        perpendicular = (-dy / length, dx / length)
+        route = [start]
+        for index in range(1, steps):
+            progress = index / steps
+            offset = self.rng.randint(-self.lateral_variance, self.lateral_variance)
+            route.append(Tile(
+                round(start.x + dx * progress + perpendicular[0] * offset),
+                round(start.y + dy * progress + perpendicular[1] * offset),
+                start.plane,
+            ))
+        route.append(destination)
+        return list(dict.fromkeys(route))
 
 
 class MinimapProjector(Protocol):

@@ -16,6 +16,21 @@ class WindMouseSettings:
     target_radius: float = 3.0
     max_points: int = 500
 
+    def __post_init__(self) -> None:
+        numeric_values = {
+            "gravity": self.gravity,
+            "wind": self.wind,
+            "max_step": self.max_step,
+            "target_radius": self.target_radius,
+        }
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+               for value in numeric_values.values()):
+            raise ValueError("WindMouse settings must be finite numbers")
+        if self.gravity <= 0 or self.wind < 0 or self.max_step <= 0 or self.target_radius < 0:
+            raise ValueError("gravity and max_step must be positive; wind and target_radius cannot be negative")
+        if isinstance(self.max_points, bool) or not isinstance(self.max_points, int) or self.max_points < 1:
+            raise ValueError("max_points must be a positive integer")
+
 
 def generate_path(start: tuple[int, int], target: tuple[int, int], settings: WindMouseSettings = WindMouseSettings(), rng: random.Random | None = None) -> list[tuple[int, int]]:
     """Generate a bounded, integer-coordinate path from ``start`` to ``target``.

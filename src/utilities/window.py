@@ -141,7 +141,7 @@ class Window:
             print(f"Window.initialize() took {time.time() - start_time} seconds.")
             return True
         self.__initialize_layout_fallback(client_rect)
-        print(f"Window.initialize() using geometry fallback ({time.time() - start_time} seconds).")
+        print(f"Window.initialize(): screen zones ready using geometry fallback ({time.time() - start_time} seconds).")
         return True
 
     def __initialize_layout_fallback(self, client_rect: Rectangle) -> None:
@@ -172,10 +172,28 @@ class Window:
         self.chat = Rectangle(content_left, chat_top, panel_left - content_left, content_bottom - chat_top)
         self.control_panel = Rectangle(panel_left, panel_top, 398, content_bottom - panel_top)
 
+        # The fallback client can be display-scaled (the captured client is
+        # about 1.66x the dimensions used by the original fixed templates).
+        # Keep the tab and inventory geometry in the same coordinate system as
+        # the rest of the fallback layout.  The old hard-coded 29px/33px tab
+        # spacing landed on inventory contents instead of the tab icons.
+        ui_scale = max(1.0, self.control_panel.width / 240.0)
+        tab_width = round(29 * ui_scale)
+        tab_height = round(26 * ui_scale)
+        tab_step = round(33 * ui_scale)
+        tabs_top = self.control_panel.top + round(4 * ui_scale)
+        tabs_bottom = content_bottom - tab_height - round(4 * ui_scale)
         self.cp_tabs = []
-        for row, y in enumerate((content_top + 264, content_top + 765)):
-            for column in range(7):
-                self.cp_tabs.append(Rectangle(panel_left + 8 + column * 33, y, 29, 26 if row == 0 else 28))
+        for tabs_y in (tabs_top, tabs_bottom):
+            self.cp_tabs.extend(
+                Rectangle(
+                    panel_left + round(8 * ui_scale) + column * tab_step,
+                    tabs_y,
+                    tab_width,
+                    tab_height,
+                )
+                for column in range(7)
+            )
         self.__locate_inv_slots(self.control_panel)
         self.__locate_prayers(self.control_panel)
         self.__locate_spells(self.control_panel)
@@ -205,7 +223,6 @@ class Window:
                 x += 62  # btn width is 52px, gap between each is 10px
             self.chat = chat
             return True
-        print("Window.__locate_chat(): Failed to find chatbox.")
         return False
 
     def __locate_control_panel(self, client_rect: Rectangle) -> bool:
@@ -223,7 +240,6 @@ class Window:
             self.__locate_spells(cp)
             self.control_panel = cp
             return True
-        print("Window.__locate_control_panel(): Failed to find control panel.")
         return False
 
     def __locate_cp_tabs(self, cp: Rectangle) -> None:
@@ -247,11 +263,12 @@ class Window:
         Creates Rectangles for each inventory slot relative to the control panel, storing it in the class property.
         """
         self.inventory_slots = []
-        slot_w, slot_h = 36, 32  # dimensions of a slot
-        gap_x, gap_y = 6, 4  # pixel gap between slots
-        y = 44 + cp.top  # start y relative to cp template
+        ui_scale = cp.width / 240.0 if cp.width >= 300 else 1.0
+        slot_w, slot_h = round(36 * ui_scale), round(32 * ui_scale)
+        gap_x, gap_y = round(6 * ui_scale), round(4 * ui_scale)
+        y = round(44 * ui_scale) + cp.top
         for _ in range(7):
-            x = 40 + cp.left  # start x relative to cp template
+            x = round(40 * ui_scale) + cp.left
             for _ in range(4):
                 self.inventory_slots.append(Rectangle(left=x, top=y, width=slot_w, height=slot_h))
                 x += slot_w + gap_x
@@ -298,7 +315,6 @@ class Window:
             True if successful, False otherwise.
         """
         if self.minimap_area is None or self.chat is None or self.control_panel is None:
-            print("Window.__locate_game_view(): Failed to locate game view. Missing minimap, chat, or control panel.")
             return False
         if self.client_fixed:
             # Uses the chatbox and known fixed size of game_view to locate it in fixed mode
@@ -367,7 +383,6 @@ class Window:
             self.minimap.subtract_list = [{"left": 0, "top": self.minimap.height - 20, "width": 20, "height": 20}]
             self.minimap_area = m
             return True
-        print("Window.__locate_minimap(): Failed to find minimap.")
         return False
 
 

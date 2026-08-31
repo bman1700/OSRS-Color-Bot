@@ -261,6 +261,10 @@ class Bot(ABC):
             overwrite: bool - if True, overwrites the current log message. If False, appends to the log.
         """
         msg = f"{debug.current_time()}: {msg}"
+        # Keep terminal launches useful for live diagnostics. The UI remains
+        # subscribed to the same event, while flush makes failures visible
+        # immediately instead of waiting for process-buffered output.
+        print(msg, flush=True)
         self.runtime.emit("log", (msg, overwrite))
 
     def clear_log(self):

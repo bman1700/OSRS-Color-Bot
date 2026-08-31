@@ -22,6 +22,18 @@ class App(customtkinter.CTk):
     WIDTH = 680
     HEIGHT = 480
     DEFAULT_GRAY = ("gray50", "gray30")
+    SCRIPT_SECTIONS = (
+        ("production", "Production Scripts"),
+        ("development", "Development Scripts"),
+        ("test", "Test Scripts"),
+    )
+    # These are intentionally explicit until scripts carry their own stable
+    # metadata. Both currently registered scripts are examples/test scripts.
+    SCRIPT_CATEGORIES = {
+        "OSRSCombat": "test",
+        "OSRSWoodcutter": "test",
+        "OSRSClickTest": "test",
+    }
 
     def __init__(self, test: bool = False):
         super().__init__()
@@ -88,6 +100,20 @@ class App(customtkinter.CTk):
         # If your bot is not appearing, make sure it is referenced in the __init__.py file of the folder it exists in.
 
         self.btn_map: dict[str, List[customtkinter.CTkButton]] = {"OSRS": []}
+        self.section_frames: dict[str, customtkinter.CTkFrame] = {}
+        self.section_buttons: dict[str, List[customtkinter.CTkButton]] = {key: [] for key, _ in self.SCRIPT_SECTIONS}
+        for section_key, section_title in self.SCRIPT_SECTIONS:
+            section = customtkinter.CTkFrame(self.scrollable_frame_left, fg_color="transparent")
+            section.grid_columnconfigure(0, weight=1)
+            section.grid(row=len(self.section_frames), column=0, sticky="ew", padx=2, pady=(4, 0))
+            customtkinter.CTkLabel(
+                section,
+                text=section_title,
+                anchor="w",
+                font=button_small_font(),
+                text_color=("gray25", "gray75"),
+            ).grid(row=0, column=0, sticky="ew", padx=8, pady=(4, 2))
+            self.section_frames[section_key] = section
 
         module = importlib.import_module("model")
         names = dir(module)
@@ -100,7 +126,23 @@ class App(customtkinter.CTk):
                     self.views[instance.game_title] = RuneLiteHomeView(parent=self.frame_right, main=self, game_title=instance.game_title)
                 instance.set_controller(self.controller)
                 self.models[name] = instance
-                self.btn_map[instance.game_title].append(self.__create_button(bot_key=name))
+                category = self.SCRIPT_CATEGORIES.get(name, "production")
+                button = self.__create_button(bot_key=name, parent=self.section_frames[category])
+                self.btn_map[instance.game_title].append(button)
+                self.section_buttons[category].append(button)
+
+        # Keep empty categories visible without adding fake, clickable scripts.
+        for category, _ in self.SCRIPT_SECTIONS:
+            if not self.section_buttons[category]:
+                customtkinter.CTkLabel(
+                    self.section_frames[category],
+                    text="No scripts",
+                    anchor="w",
+                    text_color="gray55",
+                ).grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 6))
+            else:
+                for row, button in enumerate(self.section_buttons[category], 1):
+                    button.grid(row=row, column=0, sticky="ew", padx=8, pady=3)
 
         # Settings Button (in the position of the Theme Switch)
         self.btn_settings = customtkinter.CTkButton(
@@ -126,12 +168,10 @@ class App(customtkinter.CTk):
         )
         self.current_btn: customtkinter.CTkButton = None
         self.current_btn_list: List[customtkinter.CTkButton] = self.btn_map["OSRS"]
-        for r, btn in enumerate(self.current_btn_list, 3):
-            btn.grid(row=r, column=0, sticky="we", padx=10, pady=10)
         self.toggle_btn_state(enabled=True)
 
     # ============ UI Creation Helpers ============
-    def __create_button(self, bot_key: str):
+    def __create_button(self, bot_key: str, parent=None):
         """
         Creates a preconfigured button for the bot.
         Args:
@@ -152,7 +192,7 @@ class App(customtkinter.CTk):
         font = button_small_font() if len(self.models[bot_key].bot_title) > shrink_length else button_med_font()
 
         btn = customtkinter.CTkButton(
-            master=self.scrollable_frame_left,
+            master=parent or self.scrollable_frame_left,
             text=text,
             fg_color=self.DEFAULT_GRAY,
             font=font,

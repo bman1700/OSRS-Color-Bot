@@ -13,6 +13,7 @@ from runtime.sensors import SensorService
 from runtime.events import RuntimeEventBus
 from runtime.session import BreakPolicy, SessionBudget, SessionPlanner
 from runtime.telemetry import TelemetryRecorder
+from runtime.locations import BankLocation, BankLocationRegistry
 from runtime.navigation import (MinimapNavigator, NavigationPolicy, NullPathProvider,
                                 PathProvider, SensorCompass, SnapshotTilePosition,
                                 WindowMinimapProjector, Tile)
@@ -23,6 +24,7 @@ class BotRuntime:
     def __init__(self, window, mouse: Mouse, *, telemetry: TelemetryRecorder | None = None) -> None:
         self.client = RuneLiteClient(window)
         self.mouse = mouse
+        self.mouse.set_layout_refresh(self._refresh_layout_for_input)
         self.input_provider: InputProvider | None = None
         self.actions = GameActions(mouse)
         self.vision = VisionService(self.client.zones)
@@ -36,6 +38,40 @@ class BotRuntime:
         self.verification_policy = RuntimeConfig().verification.as_policy()
         self.navigator: MinimapNavigator | None = None
         self.path_provider: PathProvider = NullPathProvider()
+        self.bank_locations = BankLocationRegistry.from_builtin()
+
+    def _refresh_layout_for_input(self, point: tuple[int, int]) -> tuple[int, int] | None:
+        """Refresh tab geometry when input is aimed at a tab band.
+
+        RuneLite's right sidebar can open or close independently of the game
+        process. Only tab-band input triggers the refresh so normal gameplay
+        movement does not pay the screenshot/template-detection cost.
+        """
+        tabs = getattr(self.client.window, "cp_tabs", ())
+        if not tabs:
+            return None
+        x, y = point
+        for tab_index, tab in enumerate(tabs):
+            if tab.left - 18 <= x <= tab.left + tab.width + 18 and tab.top - 18 <= y <= tab.top + tab.height + 18:
+                try:
+                    self.client.window.initialize()
+                    print("Runtime refreshed RuneLite layout before tab input.", flush=True)
+                    refreshed_tabs = getattr(self.client.window, "cp_tabs", ())
+                    if tab_index < len(refreshed_tabs):
+                        return refreshed_tabs[tab_index].get_center()
+                except Exception as error:
+                    print(f"Runtime could not refresh RuneLite layout before tab input: {error}", flush=True)
+                return None
+        return None
+
+    def get_bank_location(self, name: str) -> BankLocation:
+        """Return a named shared bank destination for a script."""
+        return self.bank_locations.get(name)
+
+    def save_bank_locations(self, path: str | Path | None = None) -> None:
+        """Persist the shared bank registry without changing runtime config."""
+        location_path = Path(path or Path(__file__).resolve().parents[2] / "bank_locations.json")
+        self.bank_locations.save(location_path)
 
     def emit(self, name: str, payload=None) -> None:
         self.events.emit(name, payload)

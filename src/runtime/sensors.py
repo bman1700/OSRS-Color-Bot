@@ -21,6 +21,7 @@ class SensorSnapshot:
     nearby_objects: tuple[dict[str, Any], ...] = ()
     inventory_count: int = 0
     inventory: tuple[dict[str, Any], ...] = ()
+    equipment: tuple[dict[str, Any], ...] = ()
     player_idle: bool | None = None
     animation_id: int | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -51,6 +52,15 @@ class SensorSnapshot:
         item_id = catalog.get_id(name)
         return self.item_indices(item_id) if item_id is not None else []
 
+    def equipped_item_ids(self) -> tuple[int, ...]:
+        """Return item IDs currently reported in the equipment tab."""
+        return tuple(item["id"] for item in self.equipment if "id" in item)
+
+    def has_equipped(self, item_ids: int | list[int] | tuple[int, ...]) -> bool:
+        """Return whether any requested item ID is equipped."""
+        wanted = {item_ids} if isinstance(item_ids, int) else set(item_ids)
+        return any(item.get("id") in wanted for item in self.equipment)
+
 
 class SensorService:
     """Normalize a status-socket-shaped payload without requiring a live socket."""
@@ -64,6 +74,7 @@ class SensorService:
     def snapshot(self, data: dict[str, Any] | None = None) -> SensorSnapshot:
         payload = dict(data if data is not None else (self.source() if self.source else {}))
         inventory = tuple(payload.get("inventory") or ())
+        equipment = tuple(payload.get("equipment") or ())
         attack = payload.get("attack") or {}
         animation_id = attack.get("animationId")
         return SensorSnapshot(
@@ -80,6 +91,7 @@ class SensorService:
             nearby_objects=tuple(payload.get("nearbyObjects", payload.get("objects")) or ()),
             inventory_count=len(inventory),
             inventory=inventory,
+            equipment=equipment,
             player_idle=animation_id == -1 if animation_id is not None else None,
             animation_id=animation_id,
             raw=payload,

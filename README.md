@@ -105,3 +105,39 @@ Download visual templates only for UI fallback or verification:
 The downloader resolves files through the Old School Wiki API, stores PNGs,
 and writes a sidecar JSON containing the source URL. Existing files are kept
 unless `--force` is supplied.
+
+## Shared bank locations
+
+Store reusable bank destinations in `bank_locations.json` so every script can
+look them up through its runtime:
+
+```json
+{
+  "locations": [
+    {"name": "Lumbridge", "x": 3210, "y": 3218, "plane": 0, "notes": "west bank"}
+  ]
+}
+```
+
+Scripts can access a destination with
+`self.runtime.get_bank_location("Lumbridge")`. The location registry stores
+destinations only; route selection and movement verification remain the
+responsibilities of the shared navigation service.
+
+## Waypoint movement
+
+Movement uses a traversable waypoint graph. Configure route nodes for the
+areas a script supports, then attach the provider to the runtime:
+
+```python
+from runtime import RouteNode, WaypointPathProvider
+
+route = WaypointPathProvider(route_nodes, randomness=0.15)
+self.runtime.configure_navigation(path_provider=route)
+result = self.runtime.walk_to(self.runtime.get_bank_location("Lumbridge").tile)
+```
+
+Only configured edges are used. The navigator selects bounded intermediate
+waypoints, clicks them through RemoteInput, verifies observed movement, and
+replans when necessary. Randomness changes the cost among valid graph routes;
+it does not replace collision-aware route data with arbitrary minimap clicks.
