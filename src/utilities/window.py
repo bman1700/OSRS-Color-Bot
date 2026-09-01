@@ -138,10 +138,8 @@ class Window:
         c = self.__locate_control_panel(client_rect)
         d = self.__locate_game_view(client_rect)
         if all([a, b, c, d]):  # if all templates found
-            print(f"Window.initialize() took {time.time() - start_time} seconds.")
             return True
         self.__initialize_layout_fallback(client_rect)
-        print(f"Window.initialize(): screen zones ready using geometry fallback ({time.time() - start_time} seconds).")
         return True
 
     def __initialize_layout_fallback(self, client_rect: Rectangle) -> None:
@@ -169,6 +167,15 @@ class Window:
         self.client_fixed = False
         self.minimap_area = Rectangle(panel_left, content_top, 398, panel_top - content_top)
         self.minimap = Rectangle(panel_left + 45, content_top + 5, 250, 250)
+        # Geometry fallback also needs a compass target for screen-only
+        # movement. Keep it relative to the detected minimap area so expanded
+        # RuneLite sidebars do not invalidate the location.
+        self.compass_orb = Rectangle(
+            left=panel_left + round(self.minimap_area.width * 0.10),
+            top=content_top + round(self.minimap_area.height * 0.03),
+            width=round(self.minimap_area.width * 0.06),
+            height=round(self.minimap_area.height * 0.08),
+        )
         self.chat = Rectangle(content_left, chat_top, panel_left - content_left, content_bottom - chat_top)
         self.control_panel = Rectangle(panel_left, panel_top, 398, content_bottom - panel_top)
 

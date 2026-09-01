@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import secrets
+
 from utilities.input import InputProvider
 from utilities.mouse import Mouse
 from .verification import ActionResult, RetryPolicy, VerificationPredicate, perform_verified
@@ -12,10 +14,50 @@ class GameActions:
     def __init__(self, mouse: Mouse, input_provider: InputProvider | None = None) -> None:
         self.mouse = mouse
         self.input_provider = input_provider
+        self._region_click_points: dict[tuple[int, int, int, int], tuple[int, int]] = {}
 
     def click_at(self, point: tuple[int, int], button: str = "left", **movement) -> None:
         self.mouse.move_to(point, **movement)
         self.mouse.click(button=button)
+
+    def click_within(self, rectangle, *, center_fraction: float = 0.6, button: str = "left", **movement) -> tuple[int, int]:
+        """Click a newly randomized point in the central part of a rectangle."""
+        if not 0 < center_fraction <= 1:
+            raise ValueError("center_fraction must be in (0, 1]")
+        width, height = int(rectangle.width), int(rectangle.height)
+        if width <= 0 or height <= 0:
+            raise ValueError("click rectangle must have positive dimensions")
+        center = rectangle.get_center()
+        half_width = max(1, round(width * center_fraction / 2))
+        half_height = max(1, round(height * center_fraction / 2))
+        rng = secrets.SystemRandom()
+        key = (int(rectangle.left), int(rectangle.top), width, height)
+        previous = self._region_click_points.get(key)
+        point = previous
+        while point == previous and (half_width > 0 or half_height > 0):
+            point = (
+                rng.randint(center.x - half_width, center.x + half_width),
+                rng.randint(center.y - half_height, center.y + half_height),
+            )
+        self._region_click_points[key] = point
+        self.click_at(point, button=button, **movement)
+        return point
+
+    def click_control_panel_tab(self, window, tab_index: int, **movement) -> tuple[int, int]:
+        """Click a randomized central point in a named control-panel tab."""
+        try:
+            tab = window.cp_tabs[tab_index]
+        except (AttributeError, IndexError) as error:
+            raise ValueError(f"Control-panel tab {tab_index} is unavailable") from error
+        return self.click_within(tab, center_fraction=0.6, **movement)
+
+    def click_inventory_slot(self, window, slot_index: int, **movement) -> tuple[int, int]:
+        """Click a randomized central point in one inventory slot."""
+        try:
+            slot = window.inventory_slots[slot_index]
+        except (AttributeError, IndexError) as error:
+            raise ValueError(f"Inventory slot {slot_index} is unavailable") from error
+        return self.click_within(slot, **movement)
 
     def click_at_verified(
         self,
@@ -74,8 +116,10 @@ class GameActions:
         provider = self._provider()
 
         def move_and_click(slot) -> None:
-            point = slot.random_point() if hasattr(slot, "random_point") else slot
-            self.click_at((point[0], point[1]))
+            if hasattr(slot, "get_center"):
+                self.click_within(slot)
+            else:
+                self.click_at(slot)
 
         return drop_inventory(
             slots,

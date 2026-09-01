@@ -84,7 +84,7 @@ class SensorService:
             prayer_points=payload.get("prayerPoints", payload.get("prayer")),
             special_energy=payload.get("specialEnergy", payload.get("specEnergy")),
             prayer_active=bool(payload.get("prayers")) if "prayers" in payload else None,
-            active_tab=payload.get("activeTab"),
+            active_tab=payload.get("activeTab", payload.get("currentTab", payload.get("selectedTab", payload.get("tab")))),
             chat_text=payload.get("chatText", payload.get("chat")),
             minimap=dict(payload.get("minimap") or {}),
             nearby_npcs=tuple(payload.get("nearbyNpcs", payload.get("npcs")) or ()),

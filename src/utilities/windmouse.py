@@ -55,6 +55,22 @@ def generate_path(start: tuple[int, int], target: tuple[int, int], settings: Win
         if distance <= settings.target_radius:
             break
 
+        # Preserve WindMouse's natural path at normal distances. Once near
+        # the target, damp wind and use a short direct approach; the old
+        # simulation could overshoot and orbit the click point.
+        if distance <= max(settings.target_radius * 4.0, 12.0):
+            # Keep at least one intermediate point so short movements still
+            # retain a natural approach instead of teleporting in one native
+            # mouse command.
+            steps = max(2, math.ceil(distance / settings.max_step))
+            for index in range(1, steps + 1):
+                progress = index / steps
+                point = (round(x + dx * progress), round(y + dy * progress))
+                if not points or point != points[-1]:
+                    points.append(point)
+            x, y = tx, ty
+            break
+
         wind_scale = min(settings.wind, distance) / math.sqrt(3)
         wx = wx / math.sqrt(3) + rng.uniform(-wind_scale, wind_scale)
         wy = wy / math.sqrt(3) + rng.uniform(-wind_scale, wind_scale)
