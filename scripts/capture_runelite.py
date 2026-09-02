@@ -1,8 +1,15 @@
 """Capture the visible RuneLite window for layout calibration (read-only)."""
 
+import argparse
 from pathlib import Path
 import sys
-import argparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from utilities.display import enable_per_monitor_dpi_awareness
+
+# Keep window discovery and MSS capture in physical virtual-desktop pixels.
+enable_per_monitor_dpi_awareness()
 
 import mss
 from PIL import Image
@@ -29,7 +36,10 @@ def main() -> int:
         return 1
 
     window = windows[0]
-    left, top = max(0, window.left), max(0, window.top)
+    # MSS accepts virtual-desktop coordinates, including negative values for
+    # displays arranged to the left of or above the primary monitor.  Do not
+    # clamp these values: doing so captures the wrong part of the desktop.
+    left, top = window.left, window.top
     right, bottom = left + window.width, top + window.height
     if right <= left or bottom <= top:
         print(f"Invalid window bounds: {left}, {top}, {right}, {bottom}")

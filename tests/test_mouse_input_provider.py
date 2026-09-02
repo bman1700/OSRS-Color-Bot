@@ -22,6 +22,17 @@ def test_mouse_translates_screen_coordinates_for_input_provider():
     ]
 
 
+def test_mouse_translates_negative_virtual_desktop_coordinates_for_input_provider():
+    provider = MockInputProvider()
+    provider.connect()
+    mouse = Mouse(provider, coordinate_origin=(-1920, 120))
+
+    mouse.move_to((-1800, 180))
+
+    moves = [event.args for event in provider.events if event.name == "move_to"]
+    assert moves[-1] == (120, 60)
+
+
 def test_mouse_red_click_check_uses_configured_fail_closed_verifier():
     provider = MockInputProvider()
     provider.connect()

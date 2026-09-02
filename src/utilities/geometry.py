@@ -6,6 +6,11 @@ import mss
 import numpy as np
 
 import utilities.random_util as rd
+from utilities.display import enable_per_monitor_dpi_awareness
+
+# Do this before creating MSS's process-wide capture context so Win32 window
+# bounds and captured pixels use the same virtual-desktop coordinate system.
+enable_per_monitor_dpi_awareness()
 
 Point = NamedTuple("Point", x=int, y=int)
 

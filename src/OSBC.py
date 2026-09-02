@@ -10,6 +10,12 @@ from tktooltip import ToolTip
 
 import utilities.settings as settings
 from controller.bot_controller import BotController, MockBotController
+from utilities.display import enable_per_monitor_dpi_awareness
+
+# Initialise before creating any Tk windows so all window/capture APIs share
+# physical per-monitor coordinates.
+enable_per_monitor_dpi_awareness()
+
 from model import Bot, RuneLiteBot
 from view import *
 from view.fonts.fonts import *

@@ -21,8 +21,14 @@ from utilities.hsv_color import HSVColorProfile
 
 class OSRSWoodcutter(OSRSBot):
     LOG_WAIT_TIMEOUT_SECONDS = 18.0
-    ROUTE_CHUNK_TILES = 7
-    ROUTE_CHECKPOINT_SECONDS = 2.2
+    # A circle belonging to a nearby, overlapping tree is not evidence about
+    # the selected tree. Keep this tight around the actual click point.
+    DEPLETION_ASSOCIATION_RADIUS = 45
+    DEPLETION_CONFIRMATION_POLLS = 2
+    # Short, direct projected steps keep perspective error bounded without
+    # turning every route into a sequence of cursor-probe searches.
+    ROUTE_CHUNK_TILES = 4
+    ROUTE_CHECKPOINT_SECONDS = 1.25
 
     def __init__(self):
         bot_title = "Woodcutter"
@@ -34,7 +40,7 @@ class OSRSWoodcutter(OSRSBot):
         self.take_breaks = False
         self.test_mode = False
         self.options_set = True
-        self.start_tile = Tile(3158, 3459, 0)
+        self.start_tile = Tile(3157, 3459, 0)
         self.bank_location_name = "GE West Side"
         self.bronze_axe_sprite = Path(__file__).resolve().parents[2] / "images" / "bot" / "items" / "Bronze_axe.png"
         self.logs_sprite = Path(__file__).resolve().parents[2] / "images" / "bot" / "items" / "Logs.png"
@@ -68,11 +74,21 @@ class OSRSWoodcutter(OSRSBot):
         # Tagged-tree outlines vary slightly with client scaling and scene
         # lighting. Keep this aligned with the known RuneLite capture range.
         self.tree_profile = HSVColorProfile.from_rgb("tagged_tree", (255, 0, 231), tolerance=(5, 50, 50), min_area=4)
-        # Keep banker markers distinct from the cyan player-tile marker.
+        # RuneLite's depleted-tree indicator is a bright yellow circle. Keep
+        # the area threshold high enough to ignore ordinary yellow UI text.
+        self.depleted_tree_profile = HSVColorProfile.from_rgb(
+            "depleted_tree", (255, 255, 0), tolerance=(12, 140, 140), min_area=150
+        )
+        # Keep banker markers distinct from the player-tile markers.
         self.banker_profile = HSVColorProfile.from_rgb("highlighted_banker", (0, 0, 255), tolerance=(12, 130, 130), min_area=150)
         self._unavailable_tree_points: dict[tuple[int, int], float] = {}
         self._last_player_point: tuple[int, int] | None = None
         self._last_player_tile: Tile | None = None
+        # Keep a separate trusted route anchor. _last_player_tile is cleared
+        # while taking independent OCR samples, so it cannot also serve as
+        # recovery state for a briefly blank coordinate overlay.
+        self._last_confirmed_tile: Tile | None = None
+        self._last_confirmed_tile_at = 0.0
         self._last_coordinate_was_rejected = False
         self._last_rejected_coordinate: tuple[int, int] | None = None
         self._movement_attempts: dict[tuple[int, int, int, int, int, int], int] = {}
@@ -135,7 +151,7 @@ class OSRSWoodcutter(OSRSBot):
             return
 
         if not self.__navigate_to_tree_cluster():
-            self.log_msg("Could not visually locate the tagged tree cluster after minimap search.")
+            self.log_msg("Could not visually locate the tagged tree cluster after game-view search.")
             return
 
         failed_searches = 0
@@ -172,14 +188,40 @@ class OSRSWoodcutter(OSRSBot):
             failed_searches = 0  # If code got here, a tree was found
 
             baseline_inventory_count = self.__inventory_occupied_slot_count()
+            # A depleted-tree circle can overlap another tree in screen space
+            # when the camera is pitched or trees are close together. It is
+            # therefore unsafe to reject a candidate merely because a yellow
+            # circle is nearby. Record the existing circles and only react to
+            # one that appears after this specific click.
+            baseline_depletion_markers = self.__depletion_marker_centers()
             self.runtime.actions.click()
             self.runtime.record_action_intent("chop_tree")
+            wait_state = {"depleted": False, "marker": None, "marker_polls": 0}
+
+            def received_log_or_tree_depleted() -> bool:
+                if self.__inventory_occupied_slot_count() > baseline_inventory_count:
+                    return True
+                marker = self.__new_depletion_marker_near(tree_point, baseline_depletion_markers)
+                if marker is None:
+                    wait_state["marker"] = None
+                    wait_state["marker_polls"] = 0
+                    return False
+                if wait_state["marker"] is not None and dist(marker, wait_state["marker"]) <= 18:
+                    wait_state["marker_polls"] += 1
+                else:
+                    wait_state["marker"] = marker
+                    wait_state["marker_polls"] = 1
+                if wait_state["marker_polls"] >= self.DEPLETION_CONFIRMATION_POLLS:
+                    wait_state["depleted"] = True
+                    return True
+                return False
+
             try:
                 self.wait_for(
-                    lambda: self.__inventory_occupied_slot_count() > baseline_inventory_count,
+                    received_log_or_tree_depleted,
                     timeout=self.LOG_WAIT_TIMEOUT_SECONDS,
                     interval=0.5,
-                    action="new inventory item",
+                    action="new inventory item or depleted tree marker",
                 )
             except ActionTimeoutError:
                 # Another player can deplete a tree after it was detected.
@@ -189,6 +231,12 @@ class OSRSWoodcutter(OSRSBot):
                 self.runtime.record_recovery("chop_tree", "no log received; tree unavailable")
                 self.log_msg(f"No log received from tree at {tree_point}; trying a different tagged tree.")
                 self.wait(0.5)
+                continue
+
+            if wait_state["depleted"]:
+                self._unavailable_tree_points[tree_point] = time.monotonic() + 45.0
+                self.runtime.record_recovery("chop_tree", "tree depleted indicator appeared")
+                self.log_msg(f"Tree at {tree_point} depleted before a log was received; selecting another tree.")
                 continue
 
             self.update_progress((time.time() - start_time) / end_time)
@@ -261,11 +309,17 @@ class OSRSWoodcutter(OSRSBot):
         client = self.win.rectangle()
         if client is None:
             return False
-        # The equipment slots are always in the right-side client panel, but
-        # the panel's left edge changes when RuneLite's sidebar is toggled.
-        panel_width = min(700, client.width)
-        panel_left = client.left + client.width - panel_width
-        panel = Rectangle(panel_left, self.win.control_panel.top, panel_width, self.win.control_panel.height)
+        # The RuneLite settings sidebar can expand independently of the game
+        # panel. The cached control-panel left edge may then be shifted past
+        # the actual equipment slots (especially under display scaling).
+        # Search the live client's right half instead, as tab selection does.
+        panel_left = client.left + client.width // 2
+        panel = Rectangle(
+            panel_left,
+            self.win.control_panel.top,
+            client.left + client.width - panel_left,
+            self.win.control_panel.height,
+        )
         self.log_msg(f"Searching equipment panel region {panel.left},{panel.top},{panel.width},{panel.height}.")
         return self.__find_template(panel, self.bronze_axe_sprite, confidence=0.40)
 
@@ -297,19 +351,36 @@ class OSRSWoodcutter(OSRSBot):
             return None
         player_tile = self.__find_player_tile(game_view, preferred_point=self._last_player_point)
         if player_tile is None:
+            # RuneLite can omit the tile-indicator outline for a frame while
+            # the scene, compass, or hovered coordinate tooltip is redrawn.
+            # Do a few short retries before treating it as a real failure.
+            for _ in range(3):
+                self.wait(0.12)
+                player_tile = self.__find_player_tile(game_view, preferred_point=self._last_player_point)
+                if player_tile is not None:
+                    break
+        if player_tile is None:
             # The tile outline can briefly disappear while a tree is being
             # chopped or while the scene redraws. The last confirmed screen
             # point is still a useful coordinate probe, so try it before
             # aborting navigation.
             if self._last_player_point is None:
-                self.log_msg("Current-tile check failed: cyan highlighted player tile was not found.")
+                self.log_msg("Current-tile check failed: highlighted player tile was not found.")
                 return None
             player_tile = self._last_player_point
-            self.log_msg(f"Cyan player tile temporarily unavailable; probing last known point {player_tile}.")
+            self.log_msg(f"Player tile temporarily unavailable; probing last known point {player_tile}.")
         self.log_msg(f"Highlighted player tile found at {player_tile}; moving pointer inside it.")
         self.runtime.actions.move_to(player_tile)
         self.wait(0.25)
         tile = self.__read_coordinate_tooltip(player_tile)
+        if tile is None:
+            fallback = self.__recent_confirmed_tile()
+            if fallback is not None:
+                self.log_msg(
+                    f"Coordinate overlay was temporarily blank; reusing the last confirmed tile "
+                    f"({fallback.x}, {fallback.y}, {fallback.plane})."
+                )
+                return fallback
         if tile is not None:
             if self._last_player_tile is not None and tile.plane != self._last_player_tile.plane:
                 self.log_msg(f"Ignoring transient OCR plane {tile.plane}; keeping plane {self._last_player_tile.plane}.")
@@ -337,65 +408,163 @@ class OSRSWoodcutter(OSRSBot):
             self._last_rejected_coordinate = None
             self._last_player_point = player_tile
             self._last_player_tile = tile
+            self.__remember_confirmed_tile(tile)
         return tile
 
+    def __remember_confirmed_tile(self, tile: Tile) -> None:
+        """Retain an independently valid coordinate through short OCR gaps."""
+        self._last_confirmed_tile = tile
+        self._last_confirmed_tile_at = time.monotonic()
+
+    def __recent_confirmed_tile(self) -> Tile | None:
+        """Return a route anchor only while it is recent enough to be safe."""
+        if self._last_confirmed_tile is None:
+            return None
+        return self._last_confirmed_tile if time.monotonic() - self._last_confirmed_tile_at <= 90.0 else None
+
     def __read_confirmed_route_tile(self) -> Tile | None:
-        """Read the route origin twice so one bad OCR frame cannot steer it."""
+        """Read the route origin repeatedly so one bad OCR frame cannot steer it."""
         first = self.__read_current_tile()
         if first is None:
             return None
+        if self._last_coordinate_was_rejected:
+            # __read_current_tile has already kept the last trusted location
+            # because the newly OCR'd value was an impossible jump. Do not
+            # clear that cache and let two identical bad OCR frames replace
+            # it during the independent-sample check below.
+            self.log_msg(f"Keeping last confirmed route origin ({first.x},{first.y}) after rejected OCR read.")
+            return first
+
+        # This script operates only between the configured tree area and GE
+        # bank, so a coordinate hundreds of tiles away is an OCR digit error
+        # rather than a legitimate route origin. The player-tile tooltip can
+        # occasionally misread one digit; an adjacent clear ground tile is a
+        # stable substitute anchor and, unlike the player marker, is not
+        # obscured by the character model.
+        if first.distance_to(self.start_tile) > 80 and self._last_player_point is not None:
+            for offset in ((60, 0), (-60, 0), (0, -60)):
+                probe = (self._last_player_point[0] + offset[0], self._last_player_point[1] + offset[1])
+                self.runtime.actions.move_to(probe)
+                self.wait(0.20)
+                recovered = self.__read_coordinate_tooltip(probe)
+                if recovered is not None and recovered.distance_to(self.start_tile) <= 80:
+                    self.log_msg(
+                        f"Recovered route origin from adjacent ground tile: "
+                        f"({first.x},{first.y}) -> ({recovered.x},{recovered.y})."
+                    )
+                    self._last_player_point = probe
+                    self._last_player_tile = recovered
+                    return recovered
+            self.log_msg(f"Route origin {first.x},{first.y} is implausibly far from the configured area.")
+            return None
+
+        # Do not let the first sample veto the second sample. In particular,
+        # a malformed first OCR value can be cached by __read_current_tile;
+        # clearing that cache makes the next sample independent instead of
+        # causing a valid coordinate to be rejected as an impossible jump.
+        self._last_player_tile = None
         second = self.__read_current_tile()
         if second is None:
             return first
         if abs(second.x - first.x) + abs(second.y - first.y) <= 5:
             return second
+
+        # The two samples disagree. Take one more independent sample and use
+        # the pair that agrees, which handles occasional OCR digit corruption
+        # without allowing a bad origin to poison route calibration.
+        self._last_player_tile = None
+        third = self.__read_current_tile()
+        if third is not None:
+            first_second = abs(second.x - first.x) + abs(second.y - first.y)
+            first_third = abs(third.x - first.x) + abs(third.y - first.y)
+            second_third = abs(third.x - second.x) + abs(third.y - second.y)
+            if second_third <= 5 and first_second > 5:
+                self.log_msg(
+                    f"Route origin OCR rejected first sample ({first.x},{first.y}); "
+                    f"using agreeing readings ({second.x},{second.y}) and ({third.x},{third.y})."
+                )
+                self._last_player_tile = third
+                return third
+            if first_third <= 5:
+                self.log_msg(
+                    f"Route origin OCR rejected second sample ({second.x},{second.y}); "
+                    f"using agreeing readings ({first.x},{first.y}) and ({third.x},{third.y})."
+                )
+                self._last_player_tile = third
+                return third
         self.log_msg(
             f"Route origin OCR disagreed ({first.x},{first.y} vs {second.x},{second.y}); "
-            "using the later reading."
+            "no stable origin was established."
         )
-        return second
+        self._last_player_tile = None
+        return None
 
     @staticmethod
     def __find_player_tile(game_view, preferred_point: tuple[int, int] | None = None) -> tuple[int, int] | None:
         """Return the screen center of the highlighted player tile.
 
-        The supported RuneLite configuration uses cyan for the player tile.
-        Bankers use a distinct dark-blue marker and are detected separately.
+        RuneLite can render the player tile green or cyan depending on the
+        tile-indicator color setting. Bankers use a distinct dark-blue marker
+        and are detected separately.
         """
         image = game_view.screenshot()
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         candidates = []
-        # Cyan player-tile outline in the current RuneLite configuration.
+        # The configured player marker is cyan. Retain green as a fallback
+        # for other RuneLite profiles, but do not let unrelated green UI/game
+        # markers outrank a valid cyan player tile.
         for priority, (lower, upper) in enumerate(
             (
                 ((80, 120, 120), (105, 255, 255)),
+                ((35, 80, 80), (79, 255, 255)),
             )
         ):
             mask = cv2.inRange(hsv, np.array(lower, dtype=np.uint8), np.array(upper, dtype=np.uint8))
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             for contour in contours:
                 x, y, width, height = cv2.boundingRect(contour)
-                if not (25 <= width <= 130 and 25 <= height <= 130):
+                if not (15 <= width <= 160 and 8 <= height <= 160):
                     continue
                 ratio = width / max(1, height)
-                if 0.65 <= ratio <= 1.5:
-                    # The player tile has the largest continuous highlighted
-                    # area; bounding-box area can incorrectly favor minimap
-                    # icons with a large empty box.
-                    center_x, center_y = game_view.left + x + width // 2, game_view.top + y + height // 2
-                    candidates.append((priority, -cv2.contourArea(contour), abs(width - height), center_x, center_y))
+                if not (0.2 <= ratio <= 5.0):
+                    continue
+                contour_area = cv2.contourArea(contour)
+                rectangularity = contour_area / max(1, width * height)
+                approximation = cv2.approxPolyDP(contour, 0.03 * cv2.arcLength(contour, True), True)
+                # A highlighted ground tile forms a compact convex quadrilateral.
+                # NPC/object overlays share its color but produce irregular,
+                # non-convex contours. This distinction is critical because a
+                # false player point corrupts every later OCR calibration.
+                if len(approximation) != 4 or not cv2.isContourConvex(approximation) or rectangularity < 0.70:
+                    continue
+                center_x, center_y = game_view.left + x + width // 2, game_view.top + y + height // 2
+                candidates.append((priority, -rectangularity, -contour_area, abs(width - height), center_x, center_y))
         if not candidates:
             return None
         if preferred_point is not None:
             # A player tile moves smoothly across consecutive reads. Prefer
             # the candidate nearest the previously OCR-confirmed player tile
             # so unrelated highlighted overlays cannot hijack navigation.
-            _, _, _, x, y = min(
+            _, _, _, _, x, y = min(
                 candidates,
-                key=lambda candidate: (candidate[0], dist((candidate[3], candidate[4]), preferred_point), candidate[1], candidate[2]),
+                key=lambda candidate: (candidate[0], dist((candidate[4], candidate[5]), preferred_point), candidate[1], candidate[2]),
             )
+            if dist((x, y), preferred_point) > 280:
+                # A stable camera does not move the player marker across most
+                # of the client between adjacent reads. Treat that as a lost
+                # marker so __read_current_tile can safely probe the last
+                # known point rather than jumping to an unrelated overlay.
+                return None
             return x, y
-        _, _, _, x, y = min(candidates)
+        # RuneLite keeps the local player near the centre of the game view.
+        # At startup there is no trusted historical point, so using that
+        # camera invariant avoids selecting a large same-colour marker near
+        # an edge of the scene.
+        view_center = (game_view.left + image.shape[1] // 2, game_view.top + image.shape[0] // 2)
+        _, _, _, _, x, y = min(
+            candidates,
+            key=lambda candidate: (dist((candidate[4], candidate[5]), view_center), candidate[0], candidate[1], candidate[2]),
+        )
         return x, y
 
     def __read_coordinate_tooltip(self, point: tuple[int, int]) -> Tile | None:
@@ -606,30 +775,19 @@ class OSRSWoodcutter(OSRSBot):
         if not positive_scales:
             return None
         scale = min(1.0, min(positive_scales))
-        point = (round(anchor_point[0] + vector[0] * scale), round(anchor_point[1] + vector[1] * scale))
-        # If the last destination was inaccessible, move the next click along
-        # the same direction but offset perpendicular to it. This avoids
-        # repeatedly selecting one blocked tile under an object, wall, or
-        # other collision boundary.
+        point = (
+            min(max(round(anchor_point[0] + vector[0] * scale), left), right),
+            min(max(round(anchor_point[1] + vector[1] * scale), top), bottom),
+        )
+        # Retry the same projected destination after a failed checkpoint. The
+        # next route iteration will use the newly observed player position;
+        # large perpendicular offsets make the walk appear random and can
+        # send the click onto an unrelated tile.
         movement_key = (current.x, current.y, destination.x, destination.y, current.plane, destination.plane)
         attempt = max(self._movement_attempts.get(movement_key, 0), self._route_stall_count)
-        if attempt:
-            length = max(1.0, (vector[0] ** 2 + vector[1] ** 2) ** 0.5)
-            perpendicular = (-vector[1] / length, vector[0] / length)
-            offsets = ((70, 0), (-70, 0), (0, 70), (0, -70))
-            offset_x, offset_y = offsets[(attempt - 1) % len(offsets)]
-            point = (
-                round(point[0] + perpendicular[0] * offset_x + perpendicular[1] * offset_y),
-                round(point[1] + perpendicular[1] * offset_x - perpendicular[0] * offset_y),
-            )
-            point = (
-                min(max(point[0], left), right),
-                min(max(point[1], top), bottom),
-            )
         if self._last_movement_point == point:
-            point = (point[0] + 45, point[1])
-            point = (min(max(point[0], left), right), min(max(point[1], top), bottom))
-        if self.__point_over_tagged_tree(point):
+            self.log_msg(f"Reusing stable game-view walk point on retry ({attempt}/5).")
+        if self.__point_over_tagged_tree(point) or self.__point_over_highlighted_banker(point):
             # A route waypoint can project onto a tagged tree even though the
             # player only needs to approach the tree area. Step back along
             # and sideways from the route vector to find clear ground before
@@ -650,22 +808,34 @@ class OSRSWoodcutter(OSRSBot):
                         min(max(candidate[0], left), right),
                         min(max(candidate[1], top), bottom),
                     )
-                    if not self.__point_over_tagged_tree(candidate):
+                    if not self.__point_over_tagged_tree(candidate) and not self.__point_over_highlighted_banker(candidate):
                         clear_point = candidate
                         break
                 if clear_point is not None:
                     break
             if clear_point is not None:
-                self.log_msg(f"Movement point overlaps a tagged tree; using clear ground at {clear_point}.")
+                self.log_msg(f"Movement point overlaps a marked object; using clear ground at {clear_point}.")
                 point = clear_point
+
+        # Keep the route deterministic: one projected ground point per chunk.
+        # The previous implementation probed a cross of nearby points and
+        # extrapolated from each OCR result, making the cursor visibly fan out
+        # around the player and slowing every movement action dramatically.
+        # Marker-covered points have already been redirected above; ordinary
+        # world objects are handled by the Walk-here context action below.
         self._last_movement_point = point
         self.runtime.actions.move_to(point)
-        self.wait(0.2)
+        self.wait(0.10)
         self.log_msg(
             f"Game-view movement {action_number}: {current.x},{current.y} -> "
             f"{destination.x},{destination.y} at {point}."
         )
-        if not self.__click_walk_here(force_context=self.__point_over_tagged_tree(point)):
+        # A tagged-outline box is often wider than the actual tree model.
+        # Once the route has selected nearby clear ground, forcing a context
+        # menu solely because the thin outline still overlaps that point makes
+        # movement depend on unreliable menu OCR. Bankers remain protected:
+        # a point inside a banker marker must never receive a normal click.
+        if not self.__click_walk_here(force_context=self.__point_over_highlighted_banker(point)):
             return None
         # Context-menu selection moves the cursor away from the game tile;
         # restore the destination point so the next checkpoint can read its
@@ -690,22 +860,26 @@ class OSRSWoodcutter(OSRSBot):
     def __read_route_checkpoint(self, previous: Tile, point: tuple[int, int], action_number: int) -> Tile | None:
         """Read the clicked tile once after a directional route chunk."""
         self.wait(self.ROUTE_CHECKPOINT_SECONDS)
-        # Periodically resynchronize against the cyan player tile. Cursor
-        # coordinates are faster for ordinary chunks, but a blocked path or
-        # camera shift can otherwise let the route estimate drift.
-        if action_number % 3 == 0:
-            player = self.__read_current_tile()
-            if player is not None and not self._last_coordinate_was_rejected:
-                return player
+        # Keep the cursor at its directed walk point. Moving it back to the
+        # player every few chunks is visually noisy and makes each route
+        # checkpoint slower; use player-tile OCR only as recovery when the
+        # cursor tooltip is unavailable.
         current = self.__read_cursor_tile(point)
+        if current is not None and (current.plane != previous.plane or current.distance_to(previous) > 15):
+            self.log_msg(
+                f"Ignoring implausible route checkpoint OCR: "
+                f"{previous.x},{previous.y} -> {current.x},{current.y}."
+            )
+            current = None
         if current is not None:
             # Cursor coordinates are the normal route state now. Keep the
             # world-coordinate cache synchronized so the next route does not
             # compare a real tree position against the previous bank tile.
             self._last_player_tile = current
+            self.__remember_confirmed_tile(current)
             return current
-        # A scene redraw can hide the cursor tooltip. Use the cyan player tile
-        # only as a recovery path, not during normal route checkpoints.
+        # A scene redraw can hide the cursor tooltip. Use the highlighted
+        # player tile only as a recovery path, not during normal movement.
         self.wait(0.6)
         current = self.__read_current_tile()
         return current if current is not None and not self._last_coordinate_was_rejected else None
@@ -798,18 +972,34 @@ class OSRSWoodcutter(OSRSBot):
                 return True
         return False
 
+    def __point_over_highlighted_banker(self, point: tuple[int, int]) -> bool:
+        """Keep route clicks off banker markers until banking intentionally begins."""
+        for banker in self.runtime.vision.detect_hsv("game_view", self.banker_profile):
+            bounds = banker.metadata.get("screen_bounds", {})
+            left = bounds.get("left", 0)
+            top = bounds.get("top", 0)
+            right = left + bounds.get("width", 0)
+            bottom = top + bounds.get("height", 0)
+            if left <= point[0] <= right and top <= point[1] <= bottom:
+                return True
+        return False
+
     def __click_walk_here(self, *, force_context: bool = False) -> bool:
         """Use the context-menu Walk here action when an object is hovered."""
         hover_text = self.mouseover_text()
-        # Tooltip OCR sometimes returns punctuation such as "." over clear
-        # ground.  That is not an interactable object and must not trigger a
-        # right-click/context-menu search.
+        # Empty/punctuation-only tooltip OCR is the normal clear-ground case
+        # in this client. The context-menu text is not reliably visible to
+        # OCR at every scale, so use the normal walk click there. Explicitly
+        # marked bankers/trees still arrive here with force_context=True.
         has_object_name = bool(hover_text and re.search(r"[A-Za-z]{2,}", hover_text))
         if not force_context and (not has_object_name or "walk here" in hover_text.lower()):
             self.runtime.actions.click()
             return True
 
-        reason = "tagged tree marker" if force_context else repr(hover_text)
+        # Readable object text is never clicked directly while routing.
+        # Selecting the explicit context-menu action keeps those clicks as
+        # movement only.
+        reason = "marked object" if force_context else repr(hover_text)
         self.log_msg(f"Movement point is interactable ({reason}); selecting Walk here from the context menu.")
         self.runtime.actions.click(button="right")
         self.wait(0.25)
@@ -849,10 +1039,12 @@ class OSRSWoodcutter(OSRSBot):
         # X and moving it up increases world Y. Retry a bad OCR sample rather
         # than deriving a reversed movement map from it.
         probes = []
-        # Try several nearby probe offsets. A tree, player model, or tooltip
-        # placement can make one exact screen point produce bad OCR even
-        # though the surrounding local map is readable.
-        probe_options = (((30, 0), (45, 0), (60, 0)), ((0, -15), (0, -30), (0, -45)))
+        # Prefer wider probe offsets. At a low camera pitch, several tiles
+        # can compress into only a few screen pixels vertically; calibrating
+        # from a tiny offset makes OCR noise produce an unstable projection.
+        # The shorter offsets remain fallbacks when a nearby object or tooltip
+        # makes the wider probe unreadable.
+        probe_options = (((60, 0), (45, 0), (30, 0)), ((0, -90), (0, -60), (0, -30), (0, -15)))
         for offsets in probe_options:
             accepted_delta = None
             accepted_offset = None
@@ -869,10 +1061,7 @@ class OSRSWoodcutter(OSRSBot):
                     self.log_msg(f"Ignoring transient calibration plane {tile.plane}; using plane {current.plane}.")
                     tile = Tile(tile.x, tile.y, current.plane)
                 delta = (tile.x - current.x, tile.y - current.y)
-                valid_direction = (
-                    (offset[0] and 0 < delta[0] <= 8 and abs(delta[1]) <= 2)
-                    or (offset[1] and 0 < delta[1] <= 8 and abs(delta[0]) <= 2)
-                )
+                valid_direction = self.__is_calibration_delta(offset, delta)
                 if valid_direction:
                     accepted_delta = delta
                     accepted_offset = offset
@@ -893,9 +1082,27 @@ class OSRSWoodcutter(OSRSBot):
         )
         return x_probe, y_probe, x_tile_delta, y_tile_delta
 
+    @staticmethod
+    def __is_calibration_delta(offset: tuple[int, int], delta: tuple[int, int]) -> bool:
+        """Reject OCR outliers without assuming screen and world axes align.
+
+        At a low camera pitch, a small horizontal screen movement can traverse
+        many north/south tiles.  It is therefore valid for the cross-axis
+        component to be substantial; the primary component still establishes
+        which screen direction the probe represents.
+        """
+        if offset[0]:
+            return 0 < delta[0] <= 12 and abs(delta[1]) <= 40
+        if offset[1]:
+            # The apparent north/south direction reverses with some camera
+            # pitches and display layouts. The calibration matrix below uses
+            # the measured sign, so either direction is valid here.
+            return 0 < abs(delta[1]) <= 40 and abs(delta[0]) <= 40
+        return False
+
     def __wait_until_player_stops(self, previous: Tile) -> Tile | None:
         """Wait for a stable tile, retaining the last reading for replanning."""
-        # OCR takes a few seconds per reading, and longer minimap clicks can
+        # OCR takes a few seconds per reading, and longer game-view walks can
         # legitimately keep the player moving for more than the old 12-second
         # window. Do not discard a usable last position because one tooltip
         # read was missed while the camera was moving.
@@ -938,20 +1145,17 @@ class OSRSWoodcutter(OSRSBot):
         if bank is None:
             self.log_msg(f"Banking failed: unknown bank location {self.bank_location_name!r}.")
             return False
-        if not self.__navigate_to_tile(bank.tile, f"bank {bank.name}", arrival_distance=4.0):
+        # Bank NPCs and other players crowd the exact destination tile. Stop
+        # slightly short of it; the highlighted-banker routine below handles
+        # the intentional interaction instead of a route click doing so by
+        # accident.
+        arrived = self.__navigate_to_tile(bank.tile, f"bank {bank.name}", arrival_distance=6.0)
+        if not arrived and not self.__bank_interface_visible():
             return False
-        if not self.__click_highlighted_banker():
-            self.log_msg("Banking failed: no highlighted banker could be verified.")
-            return False
-        try:
-            self.wait_for(
-                lambda: self.__find_template_rect(self.win.game_view, self.bank_deposit_all_template, confidence=0.12) is not None,
-                timeout=8.0,
-                interval=0.4,
-                action="bank interface",
-            )
-        except ActionTimeoutError:
-            self.log_msg("Banking failed: bank interface did not open.")
+        if not arrived:
+            self.log_msg("Bank interface opened during route movement; continuing with the deposit.")
+        elif not self.__bank_interface_visible() and not self.__click_highlighted_banker():
+            self.log_msg("Banking failed: no highlighted banker opened the bank interface.")
             return False
 
         deposit = self.__find_template_rect(self.win.game_view, self.bank_deposit_all_template, confidence=0.12)
@@ -989,24 +1193,75 @@ class OSRSWoodcutter(OSRSBot):
             return False
         return self.__navigate_to_tile(self.start_tile, "tree area")
 
+    def __bank_interface_visible(self) -> bool:
+        """Return whether the bank's Deposit-inventory control is on screen."""
+        return self.__find_template_rect(self.win.game_view, self.bank_deposit_all_template, confidence=0.12) is not None
+
     def __click_highlighted_banker(self) -> bool:
-        """Find a marked banker and require Bank hover text before clicking."""
+        """Try marked candidates until one demonstrably opens the bank interface."""
         bankers = self.runtime.vision.detect_hsv("game_view", self.banker_profile)
-        for banker in sorted(bankers, key=lambda item: item.area, reverse=True):
+        candidates = []
+        for banker in bankers:
             bounds = banker.metadata["screen_bounds"]
-            point = (bounds["left"] + bounds["width"] // 2, bounds["top"] + bounds["height"] // 2)
+            points = self.__banker_candidate_points(bounds)
+            for index, point in enumerate(points):
+                self.runtime.actions.move_to(point)
+                self.wait(0.25)
+                candidates.append((self.mouseover_text(contains="Bank"), banker.area, index, point, bounds))
+
+        # The center is the only safe fallback for an unverified marker. A
+        # blue UI fragment or unrelated NPC must not create a minute-long
+        # sequence of speculative clicks. When hover OCR does confirm Bank,
+        # inspect the other interior points because overlapping players can
+        # leave the marker center over empty ground.
+        candidates = [candidate for candidate in candidates if candidate[0] or candidate[2] == 0]
+        for hover_verified, _, _, point, bounds in sorted(candidates, key=lambda item: (item[0], item[1]), reverse=True):
+            if hover_verified:
+                self.log_msg(f"Trying hover-verified highlighted banker at {point}.")
+            else:
+                self.log_msg(
+                    f"Trying unverified highlighted bank candidate at {point} "
+                    f"within {bounds['left']},{bounds['top']},{bounds['width']},{bounds['height']}."
+                )
             self.runtime.actions.move_to(point)
-            self.wait(0.25)
-            if not self.mouseover_text(contains="Bank"):
-                # A dark-blue marker can also surround a Grand Exchange
-                # clerk. Clicking when hover OCR is unavailable is unsafe:
-                # it can open the exchange screen instead of the bank.
-                self.log_msg(f"Skipping unverified banker candidate at {point}.")
-                continue
-            self.log_msg(f"Clicking verified highlighted banker at {point}.")
             self.runtime.actions.click()
-            return True
+            try:
+                self.wait_for(
+                    lambda: self.__find_template_rect(self.win.game_view, self.bank_deposit_all_template, confidence=0.12) is not None,
+                    timeout=2.0,
+                    interval=0.25,
+                    action="bank interface",
+                )
+                return True
+            except ActionTimeoutError:
+                # The blue highlight can indicate a Grand Exchange clerk. If
+                # it opened another interface, Escape returns to the scene so
+                # the next candidate can be tested safely.
+                self.log_msg(f"Candidate at {point} did not open a bank; trying another marked candidate.")
+                self.runtime.actions.hold_key("esc")
+                self.wait(0.05)
+                self.runtime.actions.release_key("esc")
+                self.wait(0.40)
         return False
+
+    @staticmethod
+    def __banker_candidate_points(bounds: dict[str, int]) -> list[tuple[int, int]]:
+        """Return distinct, interior click points for an NPC-highlight region.
+
+        RuneLite highlights an NPC's outline rather than its clickable model.
+        With overlapping players, the bounding-box center can be clear ground.
+        Center-first plus four interior offsets covers the normal banker model
+        without clicking outside the highlighted region.
+        """
+        left, top = int(bounds["left"]), int(bounds["top"])
+        width, height = max(1, int(bounds["width"])), max(1, int(bounds["height"]))
+        fractions = ((0.50, 0.50), (0.35, 0.50), (0.65, 0.50), (0.50, 0.35), (0.50, 0.65))
+        points = []
+        for horizontal, vertical in fractions:
+            point = (left + min(width - 1, round(width * horizontal)), top + min(height - 1, round(height * vertical)))
+            if point not in points:
+                points.append(point)
+        return points
 
     @staticmethod
     def __load_reference_crop(path: Path, bounds: tuple[int, int, int, int]) -> np.ndarray:
@@ -1030,7 +1285,7 @@ class OSRSWoodcutter(OSRSBot):
         return None
 
     def __navigate_to_tree_cluster(self) -> bool:
-        """Search outward with minimap clicks until tagged trees are visible.
+        """Search outward with game-view clicks until tagged trees are visible.
 
         A color bot cannot derive the player's world tile, so it cannot turn
         the configured world coordinates into a universal route from an
@@ -1042,21 +1297,23 @@ class OSRSWoodcutter(OSRSBot):
             self.log_msg("Tagged tree cluster is already visible.")
             return True
 
-        minimap = self.win.minimap
-        if minimap is None or minimap.width <= 0 or minimap.height <= 0:
-            self.log_msg("Tree-cluster search failed: minimap was not located.")
+        game_view = self.win.game_view
+        if game_view is None or game_view.width <= 0 or game_view.height <= 0:
+            self.log_msg("Tree-cluster search failed: game view was not located.")
             return False
 
-        center_x = minimap.left + minimap.width // 2
-        center_y = minimap.top + minimap.height // 2
-        radius = min(minimap.width, minimap.height) // 3
-        offsets = [(0, -radius), (radius, 0), (0, radius), (-radius, 0)]
+        player = self.__find_player_tile(game_view, preferred_point=self._last_player_point)
+        center_x, center_y = player or game_view.get_center()
+        offsets = [(180, 0), (0, -180), (-180, 0), (0, 180)]
         random.shuffle(offsets)
 
         for attempt, (dx, dy) in enumerate(offsets, start=1):
             self.cancellation.raise_if_cancelled()
-            point = (center_x + dx, center_y + dy)
-            self.log_msg(f"Tree-cluster search {attempt}/{len(offsets)}: walking via minimap to {point}.")
+            point = (
+                min(max(center_x + dx, game_view.left + 30), game_view.left + game_view.width - 30),
+                min(max(center_y + dy, game_view.top + 30), game_view.top + game_view.height - 30),
+            )
+            self.log_msg(f"Tree-cluster search {attempt}/{len(offsets)}: walking in game view to {point}.")
             self.runtime.actions.click_at(point)
             self.wait(3.0)
             if self.runtime.vision.detect_hsv("game_view", self.tree_profile):
@@ -1117,7 +1374,7 @@ class OSRSWoodcutter(OSRSBot):
 
     def __run_test_script(self):
         """Exercise highlighted-tree clicks, inventory drops, and movement."""
-        self.log_msg("Woodcutter test script started: highlighted trees, drops, and minimap movement.")
+        self.log_msg("Woodcutter test script started: highlighted trees, drops, and game-view movement.")
         start_time = time.monotonic()
         end_time = start_time + self.running_time * 60
         cycle = 0
@@ -1145,12 +1402,12 @@ class OSRSWoodcutter(OSRSBot):
             self.log_msg(f"Cycle {cycle}: dropping {len(inventory_slots)} detected log slots.")
             self.runtime.actions.drop_inventory(inventory_slots)
 
-            minimap = self.win.zones.minimap.rectangle
-            center_x = minimap.left + minimap.width // 2
-            center_y = minimap.top + minimap.height // 2
-            for offset in ((18, 0), (0, 18), (-18, 0)):
+            game_view = self.win.zones.game_view.rectangle
+            center_x = game_view.left + game_view.width // 2
+            center_y = game_view.top + game_view.height // 2
+            for offset in ((120, 0), (0, -120), (-120, 0)):
                 destination = (center_x + offset[0], center_y + offset[1])
-                self.log_msg(f"Cycle {cycle}: moving via minimap to {destination}.")
+                self.log_msg(f"Cycle {cycle}: moving in game view to {destination}.")
                 self.runtime.actions.click_at(destination)
                 self.wait(0.5)
             self.wait(1.0)
@@ -1197,6 +1454,30 @@ class OSRSWoodcutter(OSRSBot):
         # is a more stable point inside the marked tree than a random box point.
         self.runtime.actions.move_to(point)
         return point
+
+    def __depletion_marker_centers(self) -> list[tuple[int, int]]:
+        """Return the screen centres of RuneLite's visible depleted-tree circles."""
+        zone = self.win.zones.game_view
+        return [zone.to_screen(marker.center) for marker in self.runtime.vision.detect_hsv("game_view", self.depleted_tree_profile)]
+
+    def __new_depletion_marker_near(
+        self, tree_point: tuple[int, int], baseline_markers: list[tuple[int, int]]
+    ) -> tuple[int, int] | None:
+        """Return a new circle tightly associated with the selected tree.
+
+        Existing circles are deliberately ignored: with overlapping canopies,
+        their screen position is not enough to identify which tree they belong
+        to. A newly created circle is the reliable signal that the clicked tree
+        was depleted by another player before this bot received a log.
+        """
+        for marker_point in self.__depletion_marker_centers():
+            # The marker outline can shift a few pixels while the scene is
+            # redrawn, so match it to a pre-click circle with a small radius.
+            if any(dist(marker_point, previous) <= 28 for previous in baseline_markers):
+                continue
+            if dist(marker_point, tree_point) <= self.DEPLETION_ASSOCIATION_RADIUS:
+                return marker_point
+        return None
 
     def __drop_logs(self):
         """
