@@ -38,7 +38,7 @@ class App(customtkinter.CTk):
     SCRIPT_CATEGORIES = {
         "OSRSCombat": "test",
         "OSRSWoodcutter": "test",
-        "OSRSClickTest": "test",
+        "OSRSMovement": "test",
     }
 
     def __init__(self, test: bool = False):

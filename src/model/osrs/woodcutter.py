@@ -248,7 +248,7 @@ class OSRSWoodcutter(OSRSBot):
         """Confirm the equipped axe, optionally checking inventory space."""
         self.__refresh_window_layout("equipment check")
         self.log_msg("Checking gear tab for an equipped bronze axe...")
-        # Click Test verified that the equipment tab is directly to the right
+        # The retired UI diagnostic verified that the equipment tab is directly to the right
         # of Inventory in this client layout.
         if not self.__select_control_panel_tab("equipment"):
             return False
@@ -532,10 +532,12 @@ class OSRSWoodcutter(OSRSBot):
                 rectangularity = contour_area / max(1, width * height)
                 approximation = cv2.approxPolyDP(contour, 0.03 * cv2.arcLength(contour, True), True)
                 # A highlighted ground tile forms a compact convex quadrilateral.
-                # NPC/object overlays share its color but produce irregular,
-                # non-convex contours. This distinction is critical because a
-                # false player point corrupts every later OCR calibration.
-                if len(approximation) != 4 or not cv2.isContourConvex(approximation) or rectangularity < 0.70:
+                # At the low camera pitch used around the GE, its perspective
+                # projection can fill only about 64% of its bounding box.
+                # Keep the threshold below that observed tile (rather than
+                # treating the player marker as unavailable), while retaining
+                # the four-corner/convex checks that reject NPC/object overlays.
+                if len(approximation) != 4 or not cv2.isContourConvex(approximation) or rectangularity < 0.60:
                     continue
                 center_x, center_y = game_view.left + x + width // 2, game_view.top + y + height // 2
                 candidates.append((priority, -rectangularity, -contour_area, abs(width - height), center_x, center_y))
@@ -817,6 +819,14 @@ class OSRSWoodcutter(OSRSBot):
                 self.log_msg(f"Movement point overlaps a marked object; using clear ground at {clear_point}.")
                 point = clear_point
 
+        # Specialized diagnostic scripts can replace a projected point with a
+        # nearby, verified walkable one.  Keep the selected point in the
+        # normal route/checkpoint flow so its coordinate, rather than the
+        # rejected projection, becomes the next route anchor.
+        point = self._resolve_movement_click_point(point, (left, top, right, bottom))
+        if point is None:
+            return None
+
         # Keep the route deterministic: one projected ground point per chunk.
         # The previous implementation probed a cross of nearby points and
         # extrapolated from each OCR result, making the cursor visibly fan out
@@ -842,6 +852,12 @@ class OSRSWoodcutter(OSRSBot):
         # on-screen coordinate directly.
         self.runtime.actions.move_to(point)
         return self.__read_route_checkpoint(current, point, action_number)
+
+    def _resolve_movement_click_point(
+        self, point: tuple[int, int], bounds: tuple[int, int, int, int]
+    ) -> tuple[int, int] | None:
+        """Return the projected point, or let a diagnostic script refine it."""
+        return point
 
     def __read_cursor_tile(self, point: tuple[int, int] | None = None) -> Tile | None:
         """Read the tile currently under the virtual cursor without moving it."""
