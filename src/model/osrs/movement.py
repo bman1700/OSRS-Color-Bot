@@ -32,14 +32,17 @@ class OSRSMovement(OSRSWoodcutter):
             "It never banks, chops, or changes inventory/equipment."
         )
         self.round_trips = 5
-        self.start_point = Tile(3162, 3488, 0)
+        # 3162,3488 projects into the tagged west-bank booth.  Exact-finish
+        # clicks deliberately reject tagged objects, so use the nearest
+        # repeatedly observed clear standing tile instead.
+        self.start_point = Tile(3162, 3486, 0)
         self.end_point = Tile(3157, 3459, 0)
         self._approved_walk_point: tuple[int, int] | None = None
         self.options_set = True
 
     def create_options(self):
         self.options_builder.add_slider_option("round_trips", "How many round trips?", 1, 100)
-        self.options_builder.add_text_edit_option("start_point", "Start tile (x, y, plane)", "3162, 3488, 0")
+        self.options_builder.add_text_edit_option("start_point", "Start tile (x, y, plane)", "3162, 3486, 0")
         self.options_builder.add_text_edit_option("end_point", "End tile (x, y, plane)", "3157, 3459, 0")
 
     def save_options(self, options: dict):
@@ -86,6 +89,22 @@ class OSRSMovement(OSRSWoodcutter):
         """Find a nearby point with conservative visual clearance from trees."""
         self._approved_walk_point = None
         left, top, right, bottom = bounds
+        # Cursor-coordinate tooltips can cover the tagged outline at the
+        # exact point that is about to be checked. Move to the most distant
+        # safe canvas corner first, then take one unobscured marker snapshot
+        # for every candidate in this resolution pass.
+        parking_point = max(
+            (
+                (left + 10, top + 10),
+                (right - 10, top + 10),
+                (left + 10, bottom - 10),
+                (right - 10, bottom - 10),
+            ),
+            key=lambda candidate: (candidate[0] - point[0]) ** 2 + (candidate[1] - point[1]) ** 2,
+        )
+        self.runtime.actions.move_to(parking_point)
+        self.wait(0.08)
+        marker_areas = self.__marker_avoidance_areas()
         # This RuneLite client's action-text OCR cannot reliably read either
         # the normal hover action or context-menu entries.  Use the tagged
         # tree geometry instead: try the route projection first, then a
@@ -101,7 +120,7 @@ class OSRSMovement(OSRSWoodcutter):
         )
         for dx, dy in offsets:
             candidate = (min(max(point[0] + dx, left), right), min(max(point[1] + dy, top), bottom))
-            if not self.__has_marker_clearance(candidate):
+            if not self.__has_marker_clearance(candidate, marker_areas):
                 continue
             self._approved_walk_point = candidate
             if candidate != point:
@@ -120,27 +139,50 @@ class OSRSMovement(OSRSWoodcutter):
         for _ in range(2):
             self.wait(0.06)
             hover_text = self.mouseover_text()
-            # In this client an empty mouseover area is the clear-ground
-            # signal. Require two clean frames; any readable object/NPC
-            # action cancels before the input is sent.
-            if hover_text and re.search(r"[A-Za-z]{2,}", hover_text):
-                self.log_msg(f"Movement click cancelled: live hover action was {hover_text!r}.")
-                self._approved_walk_point = None
-                return False
+            # A blank OCR result is not evidence of clear ground: the
+            # reported tree click occurred when Chop down was rendered but
+            # action-text OCR returned empty. Only two explicit Walk here
+            # reads may authorize a normal left-click.
+            if not hover_text or "walk here" not in hover_text.lower():
+                self.log_msg(
+                    "Movement could not verify clear ground from the live hover action; "
+                    "selecting Walk here from the context menu."
+                )
+                approved_point = self._approved_walk_point
+                clicked = super()._OSRSWoodcutter__click_walk_here(force_context=True)
+                self._approved_walk_point = approved_point if clicked else None
+                return clicked
         self.runtime.actions.click()
         return True
 
-    def __has_marker_clearance(self, point: tuple[int, int]) -> bool:
-        """Reject a point inside or immediately beside any tagged tree/banker."""
+    def __marker_avoidance_areas(self) -> list[tuple[int, int, int, int]]:
+        """Snapshot padded tagged-tree and banker rectangles."""
+        areas = []
         for profile, padding in ((self.tree_profile, 22), (self.banker_profile, 32)):
             for marker in self.runtime.vision.detect_hsv("game_view", profile):
                 bounds = marker.metadata.get("screen_bounds", {})
                 left = int(bounds.get("left", 0)) - padding
                 top = int(bounds.get("top", 0)) - padding
-                right = left + int(bounds.get("width", 0)) + padding * 2
-                bottom = top + int(bounds.get("height", 0)) + padding * 2
-                if left <= point[0] <= right and top <= point[1] <= bottom:
-                    return False
+                areas.append(
+                    (
+                        left,
+                        top,
+                        left + int(bounds.get("width", 0)) + padding * 2,
+                        top + int(bounds.get("height", 0)) + padding * 2,
+                    )
+                )
+        return areas
+
+    def __has_marker_clearance(
+        self,
+        point: tuple[int, int],
+        marker_areas: list[tuple[int, int, int, int]] | None = None,
+    ) -> bool:
+        """Reject a point inside or immediately beside any tagged tree/banker."""
+        areas = self.__marker_avoidance_areas() if marker_areas is None else marker_areas
+        for left, top, right, bottom in areas:
+            if left <= point[0] <= right and top <= point[1] <= bottom:
+                return False
         return True
 
     def main_loop(self):
@@ -463,31 +505,51 @@ class OSRSMovement(OSRSWoodcutter):
                 )
             self.log_msg("Player remained outside the five-tile exact-finish zone after three approaches.")
             return False
+        anchor_point, anchor_tile = point, source
         for attempt in range(1, 4):
-            point = self.__project_cursor_target(point, source, destination, calibration, bounds, allow_clip=False)
-            if point is None:
+            candidate_point = self.__project_cursor_target(
+                anchor_point, anchor_tile, destination, calibration, bounds, allow_clip=False
+            )
+            if candidate_point is None:
                 self.log_msg("Exact finish could not display the destination tile inside the game view.")
                 break
-            self.runtime.actions.move_to(point)
+            self.runtime.actions.move_to(candidate_point)
             self.wait(0.15)
-            highlighted = self._OSRSWoodcutter__read_cursor_tile(point)
+            highlighted = self._OSRSWoodcutter__read_cursor_tile(candidate_point)
             if highlighted is None:
                 self.log_msg("Exact finish could not read the highlighted destination candidate.")
-                break
+                continue
+            if highlighted.distance_to(destination) > 5:
+                # A projected point only a few tiles from the destination
+                # cannot legitimately jump tens (or thousands) of tiles.
+                # Keep the last trustworthy point/tile pair so the next
+                # correction repeats the same projection instead of letting
+                # one bad digit throw the cursor out of the game view.
+                self.log_msg(
+                    f"Exact finish rejected implausible cursor OCR "
+                    f"({highlighted.x},{highlighted.y}); expected near "
+                    f"({destination.x},{destination.y})."
+                )
+                continue
             if highlighted != destination:
                 self.log_msg(
                     f"Exact finish correction {attempt}/3: highlighted "
                     f"({highlighted.x},{highlighted.y}) instead of ({destination.x},{destination.y})."
                 )
-                source = highlighted
+                anchor_point, anchor_tile = candidate_point, highlighted
                 continue
-            if not self.__has_marker_clearance(point):
-                self.log_msg("Exact finish destination is covered by a tagged marker; click cancelled safely.")
-                break
-            self._approved_walk_point = point
+            if not self.__has_marker_clearance(candidate_point):
+                self.log_msg(
+                    "Exact finish destination is covered by a tagged marker; "
+                    "choose a marker-clear endpoint tile."
+                )
+                return False
+            self._approved_walk_point = candidate_point
             if not self._OSRSWoodcutter__click_walk_here():
                 break
-            self.log_msg(f"Exact finish: clicked destination tile ({destination.x},{destination.y}) at {point}.")
+            self.log_msg(
+                f"Exact finish: clicked destination tile ({destination.x},{destination.y}) at {candidate_point}."
+            )
             arrived = self.__wait_for_player_stop()
             if arrived is not None and arrived[1] == destination:
                 self.log_msg(f"Arrived at {destination_name}.")

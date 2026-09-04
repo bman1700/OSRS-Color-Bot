@@ -510,6 +510,7 @@ class OSRSWoodcutter(OSRSBot):
         image = game_view.screenshot()
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         candidates = []
+        partial_cyan_candidates = []
         # The configured player marker is cyan. Retain green as a fallback
         # for other RuneLite profiles, but do not let unrelated green UI/game
         # markers outrank a valid cyan player tile.
@@ -523,6 +524,20 @@ class OSRSWoodcutter(OSRSBot):
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             for contour in contours:
                 x, y, width, height = cv2.boundingRect(contour)
+                # Once coordinate text is displayed above the cursor, its
+                # opaque background can cover the top of the player outline.
+                # Retain a substantial nearby cyan fragment as a recovery
+                # candidate. It is used only with a previously OCR-confirmed
+                # player point, never for an unanchored startup detection.
+                if (
+                    priority == 0
+                    and 15 <= width <= 160
+                    and 3 <= height <= 160
+                    and cv2.countNonZero(mask[y : y + height, x : x + width]) >= 20
+                ):
+                    partial_cyan_candidates.append(
+                        (game_view.left + x + width // 2, game_view.top + y + height // 2)
+                    )
                 if not (15 <= width <= 160 and 8 <= height <= 160):
                     continue
                 ratio = width / max(1, height)
@@ -541,23 +556,35 @@ class OSRSWoodcutter(OSRSBot):
                     continue
                 center_x, center_y = game_view.left + x + width // 2, game_view.top + y + height // 2
                 candidates.append((priority, -rectangularity, -contour_area, abs(width - height), center_x, center_y))
-        if not candidates:
-            return None
         if preferred_point is not None:
             # A player tile moves smoothly across consecutive reads. Prefer
             # the candidate nearest the previously OCR-confirmed player tile
             # so unrelated highlighted overlays cannot hijack navigation.
-            _, _, _, _, x, y = min(
-                candidates,
-                key=lambda candidate: (candidate[0], dist((candidate[4], candidate[5]), preferred_point), candidate[1], candidate[2]),
-            )
-            if dist((x, y), preferred_point) > 280:
+            if candidates:
+                _, _, _, _, x, y = min(
+                    candidates,
+                    key=lambda candidate: (
+                        candidate[0],
+                        dist((candidate[4], candidate[5]), preferred_point),
+                        candidate[1],
+                        candidate[2],
+                    ),
+                )
+                if dist((x, y), preferred_point) <= 60:
+                    return x, y
+            if partial_cyan_candidates:
+                partial = min(partial_cyan_candidates, key=lambda point: dist(point, preferred_point))
+                if dist(partial, preferred_point) <= 120:
+                    return partial
+            if not candidates or dist((x, y), preferred_point) > 280:
                 # A stable camera does not move the player marker across most
                 # of the client between adjacent reads. Treat that as a lost
                 # marker so __read_current_tile can safely probe the last
                 # known point rather than jumping to an unrelated overlay.
                 return None
             return x, y
+        if not candidates:
+            return None
         # RuneLite keeps the local player near the centre of the game view.
         # At startup there is no trusted historical point, so using that
         # camera invariant avoids selecting a large same-colour marker near
@@ -576,8 +603,14 @@ class OSRSWoodcutter(OSRSBot):
             return None
         if coordinate_ocr_available():
             # RuneLite positions the tooltip beside the cursor and may flip
-            # it above/left near a screen edge. Try all neighboring placements.
+            # it above/left near a screen edge. Try tooltip-sized crops first:
+            # broad crops include floor lines, walls, and character models
+            # that routinely overwhelm otherwise clear coordinate text.
             for offset_x, offset_y, width, height in (
+                (-25, 15, 190, 70),
+                (-165, 15, 190, 70),
+                (-25, -70, 190, 70),
+                (-165, -70, 190, 70),
                 (-60, -60, 340, 160),
                 (10, -80, 300, 160),
                 (-260, -80, 300, 160),

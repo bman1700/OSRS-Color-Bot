@@ -34,11 +34,12 @@ class App(customtkinter.CTk):
         ("test", "Test Scripts"),
     )
     # These are intentionally explicit until scripts carry their own stable
-    # metadata. Both currently registered scripts are examples/test scripts.
+    # metadata.
     SCRIPT_CATEGORIES = {
         "OSRSCombat": "test",
         "OSRSWoodcutter": "test",
         "OSRSMovement": "test",
+        "OSRSMovementV2": "test",
     }
 
     def __init__(self, test: bool = False):
